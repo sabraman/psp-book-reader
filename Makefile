@@ -12,7 +12,7 @@ LIBS = -lSDL2_ttf -lharfbuzz -lfreetype -lbz2 -lSDL2_image -lSDL2main -lSDL2 -lG
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PSP-BookReader
-PSP_EBOOT_ICON = NULL
+PSP_EBOOT_ICON = ICON0.PNG
 PSP_EBOOT_ADATA = fonts/extras/ttf/Inter-Regular.ttf
 
 PSPSDK=$(shell psp-config --pspsdk-path)

@@ -1,7 +1,17 @@
+
+# System
+.DS_Store
+.vscode/
+
+# Build artifacts
 *.o
+*.a
 *.elf
 *.PBP
 PARAM.SFO
+EBOOT.PBP
+
+# Runtime
 debug.log
-.DS_Store
 books/
+thumbs/
