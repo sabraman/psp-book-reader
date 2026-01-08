@@ -51,7 +51,7 @@ bool TextRenderer::LoadFont(float scale) {
   ClearMetricsCache();
 
   fontScale = scale;
-  const char *fontPath = "fonts/extras/ttf/Inter-Regular.ttf";
+  const char *fontPath = "fonts/Inter-Regular.ttf";
 
   auto loadOne = [&](TextStyle style, int baseSize) {
     int size = (int)(baseSize * fontScale);
