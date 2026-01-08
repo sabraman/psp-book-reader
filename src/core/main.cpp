@@ -48,6 +48,18 @@ static int linesPerPage = 10;
 static int menuSelection = 0;
 static int menuScroll = 0;
 
+// Background Layout State
+struct LayoutState {
+  int chapterIndex = -1;
+  int wordIdx = 0;
+  int lineCount = 0;
+  bool complete = true;
+  bool needsReset = false;
+} layoutState;
+
+static std::vector<int> pageAnchors; // wordIndex for start of each page
+static int currentPageIdx = 0;
+
 static char *words[MAX_WORDS];
 static TextStyle wordStyles[MAX_WORDS];
 static char wordBuffer[WORD_BUFFER_SIZE];
@@ -94,93 +106,122 @@ bool isRedundantMetadata(const char *text, const EpubMetadata &meta) {
   return false;
 }
 
-void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
-                  TextRenderer &renderer, int chapterIndex) {
+void resetLayout(int chapterIndex, EpubReader &reader,
+                 HtmlTextExtractor &extractor) {
   if (chapterIndex < 0)
     return;
-  DebugLogger::Log("Updating Layout: Ch %d, Rot: %d", chapterIndex, isRotated);
+
   uint8_t *raw_data = reader.LoadChapter(chapterIndex);
   if (!raw_data)
     return;
 
-  int wordCount =
-      extractor.ExtractWords((char *)raw_data, words, wordStyles, MAX_WORDS,
-                             wordBuffer, WORD_BUFFER_SIZE);
+  memset(wordBuffer, 0, WORD_BUFFER_SIZE);
+  extractor.ExtractWords((char *)raw_data, words, wordStyles, MAX_WORDS,
+                         wordBuffer, WORD_BUFFER_SIZE);
   free(raw_data);
 
+  layoutState.chapterIndex = chapterIndex;
+  layoutState.wordIdx = 0;
+  layoutState.lineCount = 0;
+  layoutState.complete = false;
+  layoutState.needsReset = false;
+
   totalLines = 0;
-  memset(chapterLines, 0, sizeof(chapterLines));
+  currentLine = 0;
+  currentPageIdx = 0;
+  pageAnchors.clear();
+  pageAnchors.push_back(0); // Page 1 starts at word 0
+
+  DebugLogger::Log("Layout Reset for Ch %d", chapterIndex);
+}
+
+bool processLayout(EpubReader &reader, TextRenderer &renderer,
+                   int maxWords = 200) {
+  if (layoutState.complete || layoutState.chapterIndex < 0)
+    return true;
+
   int maxWidth = isRotated ? (SCREEN_HEIGHT - 2 * LAYOUT_MARGIN)
                            : (SCREEN_WIDTH - 2 * LAYOUT_MARGIN);
-  std::string currentLineStr = "";
-  TextStyle currentLineStyle = TextStyle::NORMAL;
-  const EpubMetadata &meta = reader.GetMetadata();
-
-  auto pushLine = [&](const std::string &line, TextStyle style) {
-    if (totalLines < MAX_CHAPTER_LINES) {
-      if (line.empty() || (line.length() == 1 && line[0] == ' '))
-        return;
-
-      // Aggressive filtering of redundant metadata at the start of chapters
-      if (totalLines < 20) {
-        if (isRedundantMetadata(line.c_str(), meta)) {
-          return;
-        }
-      }
-
-      strncpy(chapterLines[totalLines].text, line.c_str(), MAX_LINE_LEN - 1);
-      chapterLines[totalLines].text[MAX_LINE_LEN - 1] = '\0';
-      chapterLines[totalLines].style = style;
-      totalLines++;
-    }
-  };
-
-  for (int i = 0; i < wordCount; i++) {
-    if (words[i][0] == '\n') {
-      if (!currentLineStr.empty())
-        pushLine(currentLineStr, currentLineStyle);
-      currentLineStr = "";
-      continue;
-    }
-    if (wordStyles[i] != currentLineStyle && !currentLineStr.empty()) {
-      pushLine(currentLineStr, currentLineStyle);
-      currentLineStr = "";
-    }
-    currentLineStyle = wordStyles[i];
-    std::string testLine =
-        currentLineStr.empty() ? words[i] : (currentLineStr + " " + words[i]);
-    int width = renderer.MeasureTextWidth(testLine.c_str(), currentLineStyle);
-    if (width > maxWidth && !currentLineStr.empty()) {
-      pushLine(currentLineStr, currentLineStyle);
-      currentLineStr = words[i];
-    } else {
-      currentLineStr = testLine;
-    }
-    if (totalLines >= MAX_CHAPTER_LINES)
-      break;
-  }
-  if (!currentLineStr.empty())
-    pushLine(currentLineStr, currentLineStyle);
-
-  // Smart skip for technical/dummy chapters
-  if (chapterIndex <= 1 && totalLines < 5) {
-    bool allMeta = true;
-    for (int i = 0; i < totalLines; i++)
-      if (!isRedundantMetadata(chapterLines[i].text, meta))
-        allMeta = false;
-    if (allMeta) {
-      DebugLogger::Log("Auto-skipping noise chapter: %d", chapterIndex);
-      totalLines = 0;
-    }
-  }
-
   int availableHeight =
       (isRotated ? SCREEN_WIDTH : SCREEN_HEIGHT) - LAYOUT_START_Y - 40;
   linesPerPage = availableHeight / (int)(LAYOUT_LINE_SPACE * fontScale);
   if (linesPerPage < 1)
     linesPerPage = 1;
 
-  DebugLogger::Log("Layout Updated: %d lines", totalLines);
+  const EpubMetadata &meta = reader.GetMetadata();
+  int wordsProcessed = 0;
+
+  while (layoutState.wordIdx < MAX_WORDS &&
+         words[layoutState.wordIdx] != nullptr && wordsProcessed < maxWords) {
+    if (words[layoutState.wordIdx][0] == '\n') {
+      layoutState.wordIdx++;
+      wordsProcessed++;
+      continue;
+    }
+
+    std::string currentLineStr = "";
+    TextStyle currentLineStyle = wordStyles[layoutState.wordIdx];
+
+    while (layoutState.wordIdx < MAX_WORDS &&
+           words[layoutState.wordIdx] != nullptr) {
+      if (words[layoutState.wordIdx][0] == '\n')
+        break;
+
+      std::string testLine =
+          currentLineStr.empty()
+              ? words[layoutState.wordIdx]
+              : (currentLineStr + " " + words[layoutState.wordIdx]);
+      int width = renderer.MeasureTextWidth(testLine.c_str(),
+                                            wordStyles[layoutState.wordIdx]);
+
+      if (width > maxWidth && !currentLineStr.empty())
+        break;
+
+      currentLineStr = testLine;
+      currentLineStyle = wordStyles[layoutState.wordIdx];
+      layoutState.wordIdx++;
+      wordsProcessed++;
+      if (wordsProcessed >= maxWords)
+        break;
+    }
+
+    if (!currentLineStr.empty() && totalLines < MAX_CHAPTER_LINES) {
+      if (totalLines < 15 &&
+          isRedundantMetadata(currentLineStr.c_str(), meta)) {
+        // Skip metadata noise
+      } else {
+        strncpy(chapterLines[totalLines].text, currentLineStr.c_str(),
+                MAX_LINE_LEN - 1);
+        chapterLines[totalLines].text[MAX_LINE_LEN - 1] = '\0';
+        chapterLines[totalLines].style = currentLineStyle;
+        totalLines++;
+
+        if (totalLines > 0 && totalLines % linesPerPage == 0) {
+          pageAnchors.push_back(layoutState.wordIdx);
+        }
+      }
+    }
+
+    if (wordsProcessed >= maxWords)
+      break;
+  }
+
+  if (layoutState.wordIdx >= MAX_WORDS ||
+      words[layoutState.wordIdx] == nullptr) {
+    layoutState.complete = true;
+    DebugLogger::Log("Layout Complete: %d lines", totalLines);
+
+    if (layoutState.chapterIndex <= 1 && totalLines < 5) {
+      bool allMeta = true;
+      for (int i = 0; i < totalLines; i++)
+        if (!isRedundantMetadata(chapterLines[i].text, meta))
+          allMeta = false;
+      if (allMeta)
+        totalLines = 0;
+    }
+  }
+
+  return layoutState.complete;
 }
 
 int main(int argc, char *argv[]) {
@@ -216,7 +257,9 @@ int main(int argc, char *argv[]) {
   HtmlTextExtractor htmlExtractor;
   int currentChapter = -1;
 
-  updateLayout(htmlExtractor, reader, renderer, 0);
+  // Initialize word pointers
+  for (int i = 0; i < MAX_WORDS; i++)
+    words[i] = nullptr;
 
   InputHandler input;
   running = 1;
@@ -234,7 +277,12 @@ int main(int argc, char *argv[]) {
     if (input.Exit())
       break;
 
-    bool layoutNeedsUpdate = false;
+    // Background layout processing
+    if (!layoutState.complete) {
+      processLayout(reader, renderer, 200); // Process 200 words per frame
+    }
+
+    bool layoutNeedsReset = false;
     if (showChapterMenu) {
       int visibleMax = isRotated ? 15 : 10;
       if (input.UpPressed()) {
@@ -249,7 +297,7 @@ int main(int argc, char *argv[]) {
       }
       if (input.CrossPressed()) {
         currentChapter = menuSelection;
-        layoutNeedsUpdate = true;
+        layoutNeedsReset = true;
         currentLine = 0;
         showChapterMenu = false;
         renderer.ClearCache();
@@ -260,19 +308,26 @@ int main(int argc, char *argv[]) {
       if (input.NextPage()) {
         if (currentChapter == -1) {
           currentChapter = 0;
-          updateLayout(htmlExtractor, reader, renderer, 0);
+          resetLayout(currentChapter, reader, htmlExtractor);
+          processLayout(reader, renderer, 500); // Immediate feel
           if (totalLines == 0) {
             currentChapter = 1;
-            layoutNeedsUpdate = true;
+            layoutNeedsReset = true;
           }
           currentLine = 0;
           renderer.ClearCache();
-        } else if (currentLine + linesPerPage < totalLines) {
-          currentLine += linesPerPage;
-          renderer.ClearCache();
+        } else if (currentLine + linesPerPage < totalLines ||
+                   !layoutState.complete) {
+          if (currentLine + linesPerPage < totalLines) {
+            currentLine += linesPerPage;
+            renderer.ClearCache();
+          } else {
+            // Speed up layout if user is waiting
+            processLayout(reader, renderer, 1000);
+          }
         } else if (currentChapter < (int)meta.spine.size() - 1) {
           currentChapter++;
-          layoutNeedsUpdate = true;
+          layoutNeedsReset = true;
           currentLine = 0;
           renderer.ClearCache();
         }
@@ -283,7 +338,10 @@ int main(int argc, char *argv[]) {
           renderer.ClearCache();
         } else if (currentChapter > 0) {
           currentChapter--;
-          updateLayout(htmlExtractor, reader, renderer, currentChapter);
+          resetLayout(currentChapter, reader, htmlExtractor);
+          // To go to the END of previous chapter, we need full layout
+          // immediately
+          processLayout(reader, renderer, 10000);
           if (currentChapter == 0 && totalLines == 0) {
             currentChapter = -1;
             renderer.ClearCache();
@@ -300,7 +358,7 @@ int main(int argc, char *argv[]) {
       }
       if (input.CirclePressed()) {
         isRotated = !isRotated;
-        layoutNeedsUpdate = true;
+        layoutNeedsReset = true;
         renderer.ClearCache();
       }
       if (input.SelectPressed())
@@ -314,17 +372,19 @@ int main(int argc, char *argv[]) {
       if (input.UpPressed()) {
         fontScale = std::min(3.0f, fontScale + 0.1f);
         renderer.LoadFont(fontScale);
-        layoutNeedsUpdate = true;
+        layoutNeedsReset = true;
       }
       if (input.DownPressed()) {
         fontScale = std::max(0.4f, fontScale - 0.1f);
         renderer.LoadFont(fontScale);
-        layoutNeedsUpdate = true;
+        layoutNeedsReset = true;
       }
     }
 
-    if (layoutNeedsUpdate && currentChapter >= 0)
-      updateLayout(htmlExtractor, reader, renderer, currentChapter);
+    if (layoutNeedsReset && currentChapter >= 0) {
+      resetLayout(currentChapter, reader, htmlExtractor);
+      processLayout(reader, renderer, 500); // Instant first page
+    }
 
     SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
     SDL_RenderClear(sdlRenderer);

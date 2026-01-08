@@ -38,6 +38,7 @@ public:
   float GetFontScale() const { return fontScale; }
 
   void ClearCache();
+  void ClearMetricsCache();
 
 private:
   SDL_Renderer *renderer;
@@ -51,6 +52,8 @@ private:
 
   // Cache key will now include the style
   std::unordered_map<std::string, CachedTexture> cache;
+  // Word width cache to speed up MeasureTextWidth
+  std::unordered_map<std::string, int> metricsCache;
 
   void CleanupCache();
   std::string GetCacheKey(const char *text, TextStyle style);

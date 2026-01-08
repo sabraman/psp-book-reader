@@ -38,6 +38,8 @@ void TextRenderer::CleanupCache() {
 
 void TextRenderer::ClearCache() { CleanupCache(); }
 
+void TextRenderer::ClearMetricsCache() { metricsCache.clear(); }
+
 bool TextRenderer::LoadFont(float scale) {
   for (auto &pair : fonts) {
     if (pair.second) {
@@ -46,6 +48,7 @@ bool TextRenderer::LoadFont(float scale) {
   }
   fonts.clear();
   CleanupCache();
+  ClearMetricsCache();
 
   fontScale = scale;
   const char *fontPath = "fonts/extras/ttf/Inter-Regular.ttf";
@@ -142,12 +145,22 @@ void TextRenderer::RenderTextCentered(const char *text, int y, uint32_t color,
 }
 
 int TextRenderer::MeasureTextWidth(const char *text, TextStyle style) {
+  if (!text || text[0] == '\0')
+    return 0;
+
+  std::string key = GetCacheKey(text, style);
+  auto it = metricsCache.find(key);
+  if (it != metricsCache.end()) {
+    return it->second;
+  }
+
   TTF_Font *font = fonts[style];
-  if (!font || !text || strlen(text) == 0)
+  if (!font)
     return 0;
 
   int w, h;
   if (TTF_SizeUTF8(font, text, &w, &h) == 0) {
+    metricsCache[key] = w;
     return w;
   }
   return 0;
