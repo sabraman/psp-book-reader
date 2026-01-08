@@ -18,6 +18,7 @@ EpubReader::EpubReader() : zipArchive(nullptr) {
 EpubReader::~EpubReader() { Close(); }
 
 bool EpubReader::Open(const char *path) {
+  Close(); // Ensure any previous file is closed
   zipArchive = malloc(sizeof(mz_zip_archive));
   if (!zipArchive)
     return false;

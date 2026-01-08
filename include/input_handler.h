@@ -21,6 +21,8 @@ public:
   bool CrossPressed();
   bool LTriggerPressed();
   bool RTriggerPressed();
+  bool LeftPressed();
+  bool RightPressed();
 
   // Manual mapping for certain SDL buttons to our bitmask
   enum {

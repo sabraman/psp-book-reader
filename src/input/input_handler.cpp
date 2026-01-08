@@ -179,3 +179,5 @@ bool InputHandler::DownPressed() { return IsPressed(BTN_DOWN); }
 bool InputHandler::CrossPressed() { return IsPressed(BTN_CROSS); }
 bool InputHandler::LTriggerPressed() { return IsPressed(BTN_L); }
 bool InputHandler::RTriggerPressed() { return IsPressed(BTN_R); }
+bool InputHandler::LeftPressed() { return IsPressed(BTN_LEFT); }
+bool InputHandler::RightPressed() { return IsPressed(BTN_RIGHT); }

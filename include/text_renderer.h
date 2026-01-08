@@ -39,6 +39,7 @@ public:
 
   void ClearCache();
   void ClearMetricsCache();
+  bool IsValid() const { return !fonts.empty(); }
 
 private:
   SDL_Renderer *renderer;

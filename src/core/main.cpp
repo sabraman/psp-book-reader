@@ -3,6 +3,7 @@
 #include "epub_reader.h"
 #include "html_text_extractor.h"
 #include "input_handler.h"
+#include "library_manager.h"
 #include "text_renderer.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -40,7 +41,7 @@ struct LineInfo {
 static LineInfo chapterLines[MAX_CHAPTER_LINES];
 static int totalLines = 0;
 static int currentLine = 0;
-static float fontScale = 1.0f;
+static float readerFontScale = 1.0f;
 static bool isRotated = false;
 static bool showChapterMenu = false;
 static bool showStatusOverlay = false;
@@ -63,6 +64,9 @@ static int currentPageIdx = 0;
 static char *words[MAX_WORDS];
 static TextStyle wordStyles[MAX_WORDS];
 static char wordBuffer[WORD_BUFFER_SIZE];
+
+enum AppState { STATE_LIBRARY, STATE_READER };
+static AppState currentState = STATE_LIBRARY;
 
 int running = 0;
 
@@ -144,7 +148,7 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
                            : (SCREEN_WIDTH - 2 * LAYOUT_MARGIN);
   int availableHeight =
       (isRotated ? SCREEN_WIDTH : SCREEN_HEIGHT) - LAYOUT_START_Y - 40;
-  linesPerPage = availableHeight / (int)(LAYOUT_LINE_SPACE * fontScale);
+  linesPerPage = availableHeight / (int)(LAYOUT_LINE_SPACE * readerFontScale);
   if (linesPerPage < 1)
     linesPerPage = 1;
 
@@ -171,6 +175,7 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
           currentLineStr.empty()
               ? words[layoutState.wordIdx]
               : (currentLineStr + " " + words[layoutState.wordIdx]);
+      // DebugLogger::Log("Measuring: %s", testLine.c_str());
       int width = renderer.MeasureTextWidth(testLine.c_str(),
                                             wordStyles[layoutState.wordIdx]);
 
@@ -240,30 +245,25 @@ int main(int argc, char *argv[]) {
   SDL_Renderer *sdlRenderer =
       SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 
-  EpubReader reader;
-  reader.Open("epub-with-cyrillic.epub");
-
-  CoverRenderer::ShowCover(sdlRenderer, reader);
-
   SDL_Event event;
-  while (SDL_PollEvent(&event))
-    ;
 
   TextRenderer renderer;
   renderer.Initialize(sdlRenderer);
-  renderer.LoadFont(fontScale);
+  renderer.LoadFont(1.0f);
 
-  const EpubMetadata &meta = reader.GetMetadata();
+  LibraryManager library;
+  library.ScanDirectory(sdlRenderer, "books");
+
+  EpubReader reader;
   HtmlTextExtractor htmlExtractor;
   int currentChapter = -1;
 
-  // Initialize word pointers
-  for (int i = 0; i < MAX_WORDS; i++)
-    words[i] = nullptr;
-
   InputHandler input;
   running = 1;
+
+  int libSelection = 0;
   uint32_t frameCount = 0;
+  bool isScanning = true;
 
   while (running) {
     frameCount++;
@@ -273,248 +273,458 @@ int main(int argc, char *argv[]) {
         running = 0;
       input.ProcessEvent(event);
     }
-
     if (input.Exit())
       break;
 
-    // Background layout processing
-    if (!layoutState.complete) {
-      processLayout(reader, renderer, 200); // Process 200 words per frame
-    }
+    if (currentState == STATE_LIBRARY) {
+      if (isScanning) {
+        SDL_SetRenderDrawColor(sdlRenderer, 15, 15, 20, 255);
+        SDL_RenderClear(sdlRenderer);
+        renderer.RenderTextCentered("SCANNING LIBRARY...", 120, 0xFFFFFFFF,
+                                    TextStyle::H2);
+        SDL_RenderPresent(sdlRenderer);
+        library.ScanDirectory(sdlRenderer, "books");
+        isScanning = false;
+        continue;
+      }
 
-    bool layoutNeedsReset = false;
-    if (showChapterMenu) {
-      int visibleMax = isRotated ? 15 : 10;
-      if (input.UpPressed()) {
-        menuSelection = std::max(0, menuSelection - 1);
-        if (menuSelection < menuScroll)
-          menuScroll = menuSelection;
-      }
-      if (input.DownPressed()) {
-        menuSelection = std::min((int)meta.spine.size() - 1, menuSelection + 1);
-        if (menuSelection >= menuScroll + visibleMax)
-          menuScroll = menuSelection - visibleMax + 1;
-      }
-      if (input.CrossPressed()) {
-        currentChapter = menuSelection;
-        layoutNeedsReset = true;
-        currentLine = 0;
-        showChapterMenu = false;
-        renderer.ClearCache();
-      }
-      if (input.TrianglePressed())
-        showChapterMenu = false;
-    } else {
-      if (input.NextPage()) {
-        if (currentChapter == -1) {
-          currentChapter = 0;
-          resetLayout(currentChapter, reader, htmlExtractor);
-          processLayout(reader, renderer, 500); // Immediate feel
-          if (totalLines == 0) {
-            currentChapter = 1;
-            layoutNeedsReset = true;
-          }
-          currentLine = 0;
-          renderer.ClearCache();
-        } else if (currentLine + linesPerPage < totalLines ||
-                   !layoutState.complete) {
-          if (currentLine + linesPerPage < totalLines) {
-            currentLine += linesPerPage;
+      // --- LIBRARY LOGIC ---
+      const auto &books = library.GetBooks();
+      if (!books.empty()) {
+        if (input.LeftPressed())
+          libSelection = std::max(0, libSelection - 1);
+        if (input.RightPressed())
+          libSelection = std::min((int)books.size() - 1, libSelection + 1);
+        if (input.LTriggerPressed())
+          libSelection = std::max(0, libSelection - 4);
+        if (input.RTriggerPressed())
+          libSelection = std::min((int)books.size() - 1, libSelection + 4);
+
+        if (input.CrossPressed()) {
+          // DebugLogger::Log("Opening book: %s",
+          //                  books[libSelection].filename.c_str());
+          if (reader.Open(books[libSelection].filename.c_str())) {
+            // DebugLogger::Log("Book opened successfully");
+            currentState = STATE_READER;
+            currentChapter = -1;
+            layoutState.complete = true;
+            layoutState.chapterIndex = -1;
+            renderer.LoadFont(readerFontScale);
+            if (!renderer.IsValid()) {
+              DebugLogger::Log("ERROR: Fonts failed to load!");
+            }
+            // DebugLogger::Log("Fonts loaded. Clearing cache...");
             renderer.ClearCache();
+            // DebugLogger::Log("Ready to render");
           } else {
-            // Speed up layout if user is waiting
-            processLayout(reader, renderer, 1000);
+            // DebugLogger::Log("Failed to open book");
           }
-        } else if (currentChapter < (int)meta.spine.size() - 1) {
-          currentChapter++;
+        }
+      }
+
+      // --- LIBRARY RENDER ---
+      // Background Gradient Simulate
+      for (int i = 0; i < 272; i++) {
+        uint8_t r = 10 + (i * 20 / 272);
+        uint8_t g = 10 + (i * 20 / 272);
+        uint8_t b = 25 + (i * 30 / 272);
+        SDL_SetRenderDrawColor(sdlRenderer, r, g, b, 255);
+        SDL_RenderDrawLine(sdlRenderer, 0, i, 480, i);
+      }
+
+      // Bookshelf lines
+      SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255, 40);
+      SDL_RenderDrawLine(sdlRenderer, 20, 205, 460, 205);
+
+      renderer.RenderText("PICK A BOOK", 40, 20, 0xFFFFFFFF, TextStyle::SMALL);
+
+      char countBuf[32];
+      snprintf(countBuf, 32, "%d BOOKS", (int)books.size());
+      renderer.RenderText(countBuf, 380, 20, 0xFF888888, TextStyle::SMALL);
+
+      if (books.empty()) {
+        renderer.RenderTextCentered("No books found in /books/", 120,
+                                    0xFF888888);
+      } else {
+        int startX = 40;
+        int spacing = 110;
+        // Simple slider animation logic (scroll logic)
+        int scrollOffset = (libSelection > 3) ? (libSelection - 3) : 0;
+
+        for (int i = 0; i < 4 && (scrollOffset + i) < (int)books.size(); i++) {
+          int idx = scrollOffset + i;
+          const auto &book = books[idx];
+          int bx = startX + i * spacing;
+          int by = 50;
+
+          if (book.thumbnail) {
+            // Shadow
+            SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 100);
+            SDL_Rect shadow = {bx + 4, by + 4, book.thumbW, book.thumbH};
+            SDL_RenderFillRect(sdlRenderer, &shadow);
+
+            SDL_Rect dst = {bx, by, book.thumbW, book.thumbH};
+            SDL_RenderCopy(sdlRenderer, book.thumbnail, nullptr, &dst);
+
+            if (idx == libSelection) {
+              float pulse = (sinf(frameCount * 0.2f) + 1.0f) * 0.5f;
+              SDL_SetRenderDrawColor(sdlRenderer, 0, 200, 255,
+                                     150 + (int)(pulse * 105));
+              for (int t = 0; t < 3; t++) {
+                SDL_Rect border = {bx - t, by - t, book.thumbW + 2 * t,
+                                   book.thumbH + 2 * t};
+                SDL_RenderDrawRect(sdlRenderer, &border);
+              }
+            }
+          }
+        }
+
+        // Glassmorphic Selection Detail
+        SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255, 20);
+        SDL_Rect glass = {0, 215, 480, 57};
+        SDL_RenderFillRect(sdlRenderer, &glass);
+
+        const auto &sel = books[libSelection];
+        // Title with shadow for readability
+        renderer.RenderText(sel.title.c_str(), 42, 222, 0xFF000000,
+                            TextStyle::NORMAL); // shadow
+        renderer.RenderText(sel.title.c_str(), 40, 220, 0xFFFFFFFF,
+                            TextStyle::NORMAL);
+        renderer.RenderText(sel.author.c_str(), 40, 242, 0xFFAAAAAA,
+                            TextStyle::SMALL);
+
+        // Selection indicator (dots)
+        for (int i = 0; i < (int)books.size(); i++) {
+          int dotX = 240 - (books.size() * 10 / 2) + i * 10;
+          if (i == libSelection)
+            SDL_SetRenderDrawColor(sdlRenderer, 0, 200, 255, 255);
+          else
+            SDL_SetRenderDrawColor(sdlRenderer, 150, 150, 150, 150);
+          SDL_Rect dot = {dotX, 10, 6, 6};
+          SDL_RenderFillRect(sdlRenderer, &dot);
+        }
+      }
+    } else {
+      // --- READER LOGIC ---
+      const EpubMetadata &meta = reader.GetMetadata();
+      // Background layout processing
+      if (!layoutState.complete) {
+        processLayout(reader, renderer, 200); // Process 200 words per frame
+      }
+
+      bool layoutNeedsReset = false;
+      if (showChapterMenu) {
+        int visibleMax = isRotated ? 22 : 10;
+        if (input.UpPressed()) {
+          menuSelection = std::max(0, menuSelection - 1);
+          if (menuSelection < menuScroll)
+            menuScroll = menuSelection;
+        }
+        if (input.DownPressed()) {
+          menuSelection =
+              std::min((int)meta.spine.size() - 1, menuSelection + 1);
+          if (menuSelection >= menuScroll + visibleMax)
+            menuScroll = menuSelection - visibleMax + 1;
+        }
+        if (input.CrossPressed()) {
+          currentChapter = menuSelection;
           layoutNeedsReset = true;
           currentLine = 0;
+          showChapterMenu = false;
           renderer.ClearCache();
         }
-      }
-      if (input.PrevPage()) {
-        if (currentLine >= linesPerPage) {
-          currentLine -= linesPerPage;
-          renderer.ClearCache();
-        } else if (currentChapter > 0) {
-          currentChapter--;
-          resetLayout(currentChapter, reader, htmlExtractor);
-          // To go to the END of previous chapter, we need full layout
-          // immediately
-          processLayout(reader, renderer, 10000);
-          if (currentChapter == 0 && totalLines == 0) {
-            currentChapter = -1;
+        if (input.TrianglePressed())
+          showChapterMenu = false;
+      } else {
+        if (input.NextPage()) {
+          if (currentChapter == -1) {
+            currentChapter = 0;
+            resetLayout(currentChapter, reader, htmlExtractor);
+            processLayout(reader, renderer, 500); // Immediate feel
+            if (totalLines == 0) {
+              currentChapter = 1;
+              layoutNeedsReset = true;
+            }
+            currentLine = 0;
             renderer.ClearCache();
-          } else {
-            currentLine = ((totalLines - 1) / linesPerPage) * linesPerPage;
-            if (currentLine < 0)
-              currentLine = 0;
+          } else if (currentLine + linesPerPage < totalLines ||
+                     !layoutState.complete) {
+            if (currentLine + linesPerPage < totalLines) {
+              currentLine += linesPerPage;
+              renderer.ClearCache();
+            } else {
+              // Speed up layout if user is waiting
+              processLayout(reader, renderer, 1000);
+            }
+          } else if (currentChapter < (int)meta.spine.size() - 1) {
+            currentChapter++;
+            layoutNeedsReset = true;
+            currentLine = 0;
             renderer.ClearCache();
           }
-        } else if (currentChapter == 0) {
-          currentChapter = -1;
+        }
+        if (input.PrevPage()) {
+          if (currentLine >= linesPerPage) {
+            currentLine -= linesPerPage;
+            renderer.ClearCache();
+          } else if (currentChapter > 0) {
+            currentChapter--;
+            resetLayout(currentChapter, reader, htmlExtractor);
+            processLayout(reader, renderer, 10000);
+            if (currentChapter == 0 && totalLines == 0) {
+              currentChapter = -1;
+              renderer.ClearCache();
+            } else {
+              currentLine = ((totalLines - 1) / linesPerPage) * linesPerPage;
+              if (currentLine < 0)
+                currentLine = 0;
+              renderer.ClearCache();
+            }
+          } else if (currentChapter == 0) {
+            currentChapter = -1;
+            renderer.ClearCache();
+          }
+        }
+        if (input.CirclePressed()) {
+          isRotated = !isRotated;
+          layoutNeedsReset = true;
           renderer.ClearCache();
         }
-      }
-      if (input.CirclePressed()) {
-        isRotated = !isRotated;
-        layoutNeedsReset = true;
-        renderer.ClearCache();
-      }
-      if (input.SelectPressed())
-        showStatusOverlay = !showStatusOverlay;
-      if (input.TrianglePressed()) {
-        showChapterMenu = true;
-        menuSelection = (currentChapter < 0) ? 0 : currentChapter;
-        menuScroll = std::max(0, menuSelection - 3);
-      }
+        if (input.SelectPressed()) {
+          currentState = STATE_LIBRARY;
+          renderer.LoadFont(1.0f);
+          renderer.ClearCache();
+        }
+        if (input.TrianglePressed()) {
+          showChapterMenu = true;
+          menuSelection = (currentChapter < 0) ? 0 : currentChapter;
+          menuScroll = std::max(0, menuSelection - 3);
+        }
 
-      if (input.UpPressed()) {
-        fontScale = std::min(3.0f, fontScale + 0.1f);
-        renderer.LoadFont(fontScale);
-        layoutNeedsReset = true;
-      }
-      if (input.DownPressed()) {
-        fontScale = std::max(0.4f, fontScale - 0.1f);
-        renderer.LoadFont(fontScale);
-        layoutNeedsReset = true;
-      }
-    }
-
-    if (layoutNeedsReset && currentChapter >= 0) {
-      resetLayout(currentChapter, reader, htmlExtractor);
-      processLayout(reader, renderer, 500); // Instant first page
-    }
-
-    SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
-    SDL_RenderClear(sdlRenderer);
-
-    auto drawUI = [&](const char *text, int tx, int ty, uint32_t color,
-                      TextStyle style = TextStyle::NORMAL) {
-      if (isRotated)
-        renderer.RenderText(text, SCREEN_WIDTH - ty, tx, color, style, 90.0f);
-      else
-        renderer.RenderText(text, tx, ty, color, style, 0.0f);
-    };
-
-    if (currentChapter == -1) {
-      if (isRotated) {
-        renderer.RenderTextCentered(meta.author, 160, 0xFFFFFFFF, TextStyle::H2,
-                                    90.0f);
-        renderer.RenderTextCentered(meta.title, 200, 0xFFFFFFFF,
-                                    TextStyle::TITLE, 90.0f);
-      } else {
-        renderer.RenderTextCentered(meta.author, 80, 0xFFFFFFFF, TextStyle::H2,
-                                    0.0f);
-        renderer.RenderTextCentered(meta.title, 120, 0xFFFFFFFF,
-                                    TextStyle::TITLE, 0.0f);
-      }
-      if (isRotated)
-        renderer.RenderTextCentered("1", 450, 0xFF888888, TextStyle::SMALL,
-                                    90.0f);
-      else
-        renderer.RenderTextCentered("1", 250, 0xFF888888, TextStyle::SMALL,
-                                    0.0f);
-    } else {
-      // Show specific chapter title in the header
-      const char *headerTitle = meta.spine[currentChapter].title;
-      if (isRotated)
-        renderer.RenderTextCentered(headerTitle, 10, 0xFF888888,
-                                    TextStyle::SMALL, 90.0f);
-      else
-        renderer.RenderTextCentered(headerTitle, 10, 0xFF888888,
-                                    TextStyle::SMALL, 0.0f);
-
-      int stepY = (int)(LAYOUT_LINE_SPACE * fontScale);
-      for (int i = 0; i < linesPerPage && (currentLine + i) < totalLines; i++) {
-        TextStyle s = chapterLines[currentLine + i].style;
-        const char *txt = chapterLines[currentLine + i].text;
-        if (!txt || txt[0] == '\0')
-          continue;
-
-        if (s == TextStyle::NORMAL) {
-          if (isRotated)
-            renderer.RenderText(txt,
-                                SCREEN_WIDTH - (LAYOUT_START_Y + i * stepY),
-                                LAYOUT_MARGIN, 0xFFFFFFFF, s, 90.0f);
-          else
-            renderer.RenderText(txt, LAYOUT_MARGIN, LAYOUT_START_Y + i * stepY,
-                                0xFFFFFFFF, s, 0.0f);
-        } else {
-          if (isRotated)
-            renderer.RenderTextCentered(txt, (LAYOUT_START_Y + i * stepY),
-                                        0xFFFFFFFF, s, 90.0f);
-          else
-            renderer.RenderTextCentered(txt, LAYOUT_START_Y + i * stepY,
-                                        0xFFFFFFFF, s, 0.0f);
+        if (input.UpPressed()) {
+          readerFontScale = std::min(3.0f, readerFontScale + 0.1f);
+          renderer.LoadFont(readerFontScale);
+          layoutNeedsReset = true;
+        }
+        if (input.DownPressed()) {
+          readerFontScale = std::max(0.4f, readerFontScale - 0.1f);
+          renderer.LoadFont(readerFontScale);
+          layoutNeedsReset = true;
         }
       }
 
-      char pbuf[32];
-      snprintf(pbuf, 32, "%d", (currentLine / linesPerPage) + 2);
-      if (isRotated)
-        renderer.RenderTextCentered(pbuf, 450, 0xFF888888, TextStyle::SMALL,
-                                    90.0f);
-      else
-        renderer.RenderTextCentered(pbuf, 250, 0xFF888888, TextStyle::SMALL,
-                                    0.0f);
-    }
+      if (layoutNeedsReset && currentChapter >= 0) {
+        resetLayout(currentChapter, reader, htmlExtractor);
+        processLayout(reader, renderer, 500); // Instant first page
+      }
 
-    if (showStatusOverlay) {
-      ScePspDateTime ptime;
-      sceRtcGetCurrentClockLocalTime(&ptime);
-      int batt = scePowerGetBatteryLifePercent();
-      char status[128];
-      snprintf(status, 128, "%02d:%02d | Bat: %d%%", ptime.hour, ptime.minute,
-               batt);
-      drawUI(status, 16, isRotated ? 430 : 230, 0xFF00FF00, TextStyle::SMALL);
-    }
+      // --- READER RENDER ---
+      SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
+      SDL_RenderClear(sdlRenderer);
 
-    if (showChapterMenu) {
-      SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 230);
-      SDL_Rect overlay = {0, 0, 480, 272};
-      SDL_RenderFillRect(sdlRenderer, &overlay);
-
-      int menuX = isRotated ? 100 : 40;
-      int menuY = isRotated ? 40 : 40;
-      int menuWidth = isRotated ? 272 : 400;
-      int visibleMax = isRotated ? 15 : 12;
-
-      for (int i = 0;
-           i < visibleMax && (menuScroll + i) < (int)meta.spine.size(); i++) {
-        int idx = menuScroll + i;
-        uint32_t color = (idx == menuSelection) ? 0xFFFFFFFF : 0xFF888888;
-
-        if (idx == menuSelection) {
-          float pulse = (sinf(frameCount * 0.15f) + 1.0f) * 0.5f;
-          uint8_t alpha = 80 + (uint8_t)(pulse * 175);
-          SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255, alpha / 8);
-          SDL_Rect selRect = {menuX - 10, menuY + i * 18 - 2, menuWidth + 20,
-                              18};
-          if (isRotated)
-            selRect = {SCREEN_WIDTH - (menuY + i * 18 + 14), menuX - 10, 18,
-                       menuWidth + 20};
-          SDL_RenderFillRect(sdlRenderer, &selRect);
-        }
-
-        const char *title = meta.spine[idx].title;
-        char trimTitle[64];
-        strncpy(trimTitle, title, 63);
-        trimTitle[63] = '\0';
-
+      auto drawUI = [&](const char *text, int tx, int ty, uint32_t color,
+                        TextStyle style = TextStyle::NORMAL) {
         if (isRotated)
-          renderer.RenderText(trimTitle, SCREEN_WIDTH - (menuY + i * 18), menuX,
-                              color, TextStyle::NORMAL, 90.0f);
+          renderer.RenderText(text, SCREEN_WIDTH - ty, tx, color, style, 90.0f);
         else
-          renderer.RenderText(trimTitle, menuX, menuY + i * 18, color,
-                              TextStyle::NORMAL, 0.0f);
+          renderer.RenderText(text, tx, ty, color, style, 0.0f);
+      };
+
+      if (currentChapter == -1) {
+        if (isRotated) {
+          renderer.RenderTextCentered(meta.author, 160, 0xFFFFFFFF,
+                                      TextStyle::H2, 90.0f);
+          renderer.RenderTextCentered(meta.author, 160, 0xFFFFFFFF,
+                                      TextStyle::H2, 90.0f);
+
+          int titleW = renderer.MeasureTextWidth(meta.title, TextStyle::TITLE);
+          if (titleW > 260) {
+            std::string t1 = meta.title;
+            std::string t2 = "";
+            size_t mid = t1.length() / 2;
+            size_t split = t1.find(' ', mid); // Try forward first
+            if (split == std::string::npos)
+              split = t1.find_last_of(' ', mid); // Then backward
+
+            if (split != std::string::npos) {
+              t2 = t1.substr(split + 1);
+              t1 = t1.substr(0, split);
+              renderer.RenderTextCentered(t1.c_str(), 200, 0xFFFFFFFF,
+                                          TextStyle::TITLE, 90.0f);
+              renderer.RenderTextCentered(t2.c_str(), 240, 0xFFFFFFFF,
+                                          TextStyle::TITLE, 90.0f);
+            } else {
+              // No spaces, force scaling down? Or just render as is (fallback)
+              renderer.RenderTextCentered(meta.title, 200, 0xFFFFFFFF,
+                                          TextStyle::TITLE, 90.0f);
+            }
+          } else {
+            renderer.RenderTextCentered(meta.title, 200, 0xFFFFFFFF,
+                                        TextStyle::TITLE, 90.0f);
+          }
+        } else {
+          renderer.RenderTextCentered(meta.author, 80, 0xFFFFFFFF,
+                                      TextStyle::H2, 0.0f);
+          renderer.RenderTextCentered(meta.title, 120, 0xFFFFFFFF,
+                                      TextStyle::TITLE, 0.0f);
+        }
+      } else {
+        const char *headerTitle = meta.spine[currentChapter].title;
+        if (isRotated)
+          renderer.RenderTextCentered(headerTitle, 10, 0xFF888888,
+                                      TextStyle::SMALL, 90.0f);
+        else
+          renderer.RenderTextCentered(headerTitle, 10, 0xFF888888,
+                                      TextStyle::SMALL, 0.0f);
+
+        int stepY = (int)(LAYOUT_LINE_SPACE * readerFontScale);
+        for (int i = 0; i < linesPerPage && (currentLine + i) < totalLines;
+             i++) {
+          TextStyle s = chapterLines[currentLine + i].style;
+          const char *txt = chapterLines[currentLine + i].text;
+          if (!txt || txt[0] == '\0')
+            continue;
+          if (s == TextStyle::NORMAL) {
+            if (isRotated)
+              renderer.RenderText(txt,
+                                  SCREEN_WIDTH - (LAYOUT_START_Y + i * stepY),
+                                  LAYOUT_MARGIN, 0xFFFFFFFF, s, 90.0f);
+            else
+              renderer.RenderText(txt, LAYOUT_MARGIN,
+                                  LAYOUT_START_Y + i * stepY, 0xFFFFFFFF, s,
+                                  0.0f);
+          } else {
+            if (isRotated)
+              renderer.RenderTextCentered(txt, (LAYOUT_START_Y + i * stepY),
+                                          0xFFFFFFFF, s, 90.0f);
+            else
+              renderer.RenderTextCentered(txt, LAYOUT_START_Y + i * stepY,
+                                          0xFFFFFFFF, s, 0.0f);
+          }
+        }
       }
 
-      if (menuScroll > 0)
-        drawUI("^", menuX + menuWidth / 2, menuY - 15, 0xFFFFFFFF);
-      if (menuScroll + visibleMax < (int)meta.spine.size())
-        drawUI("v", menuX + menuWidth / 2, menuY + visibleMax * 18, 0xFFFFFFFF);
+      if (showChapterMenu) {
+        SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 230);
+        SDL_Rect overlay = {0, 0, 480, 272};
+        SDL_RenderFillRect(sdlRenderer, &overlay);
+        int menuX = isRotated ? 10 : 40;
+        int menuY = isRotated ? 40 : 40;
+        int menuWidth = isRotated ? 250 : 400;
+        int visibleItems = isRotated ? 22 : 12;
+        for (int i = 0;
+             i < visibleItems && (menuScroll + i) < (int)meta.spine.size();
+             i++) {
+          int idx = menuScroll + i;
+          std::string title = meta.spine[idx].title;
+          uint32_t color = (idx == menuSelection) ? 0xFFFFFFFF : 0xFF888888;
+          // Loop Body
+          if (idx == menuSelection) {
+            float pulse = (sinf(frameCount * 0.15f) + 1.0f) * 0.5f;
+            SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255,
+                                   20 + (int)(pulse * 30));
+            if (isRotated) {
+              // Visual Rec for selection
+              // X (visual) = menuX
+              // Y (visual) = menuY + i*18
+              // W (visual) = menuWidth
+              // H (visual) = 18
+
+              // Rotated Rect:
+              // Physical X = 480 - (menuY + i*18) - 18 (height becomes width)
+              // => 480 - visualY - 18 Physical Y = menuX (indent) Physical W =
+              // 18 (height) Physical H = menuWidth (width)
+
+              int visualY = menuY + i * 18;
+              SDL_Rect selRect = {480 - visualY - 18 - 4, menuX - 5, 24,
+                                  menuWidth + 10};
+              SDL_RenderFillRect(sdlRenderer, &selRect);
+            } else {
+              SDL_Rect selRect = {menuX - 5, menuY + i * 18, menuWidth + 10,
+                                  18};
+              SDL_RenderFillRect(sdlRenderer, &selRect);
+            }
+          }
+          if (isRotated) {
+            int visualItemY = menuY + i * 18;
+            // For text scrolling on selected item
+            int textX = visualItemY;
+            int textY = menuX;
+
+            if (idx == menuSelection) {
+              // Measure and scroll
+              int w =
+                  renderer.MeasureTextWidth(title.c_str(), TextStyle::NORMAL);
+              int maxVisible = menuWidth;
+              if (w > maxVisible) {
+                int scrollSpeed = 2; // px per frame
+                int scrollPeriod =
+                    w + 100; // total scroll distance including pause
+                int offset =
+                    (frameCount * 2) %
+                    scrollPeriod; // Fixed scroll, or use shift logic below
+
+                int shift = (frameCount % (w + 50));
+                int effectiveX = menuX - shift;
+
+                SDL_Rect pClip;
+                pClip.x = 480 - (menuY + visibleItems * 18);
+                pClip.y = menuX;
+                pClip.w =
+                    visibleItems * 18; // Logic might be rough but safe enough
+                pClip.h = menuWidth;
+
+                SDL_RenderSetClipRect(sdlRenderer, &pClip);
+
+                renderer.RenderText(title.c_str(), 480 - visualItemY,
+                                    menuX - shift, color, TextStyle::NORMAL,
+                                    90.0f);
+
+                if (shift > 0) {
+                  renderer.RenderText(title.c_str(), 480 - visualItemY,
+                                      menuX - shift + w + 50, color,
+                                      TextStyle::NORMAL, 90.0f);
+                }
+
+                SDL_RenderSetClipRect(sdlRenderer, NULL);
+              } else {
+                renderer.RenderText(title.c_str(), 480 - visualItemY, menuX,
+                                    color, TextStyle::NORMAL, 90.0f);
+              }
+            } else {
+              renderer.RenderText(title.c_str(), 480 - visualItemY, menuX,
+                                  color, TextStyle::NORMAL, 90.0f);
+            }
+          } else {
+            // Landscape Mode
+            if (idx == menuSelection) {
+              int w =
+                  renderer.MeasureTextWidth(title.c_str(), TextStyle::NORMAL);
+              int maxVisible = menuWidth;
+              if (w > maxVisible) {
+                int shift = (frameCount % (w + 50));
+                SDL_Rect clip = {menuX, menuY + i * 18, menuWidth, 18};
+                SDL_RenderSetClipRect(sdlRenderer, &clip);
+                renderer.RenderText(title.c_str(), menuX - shift,
+                                    menuY + i * 18, color);
+                if (shift > 0) {
+                  renderer.RenderText(title.c_str(), menuX - shift + w + 50,
+                                      menuY + i * 18, color);
+                }
+                SDL_RenderSetClipRect(sdlRenderer, NULL);
+              } else {
+                renderer.RenderText(title.c_str(), menuX, menuY + i * 18,
+                                    color);
+              }
+            } else {
+              renderer.RenderText(title.c_str(), menuX, menuY + i * 18, color);
+            }
+          }
+        }
+      }
     }
 
     SDL_RenderPresent(sdlRenderer);

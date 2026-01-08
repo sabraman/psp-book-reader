@@ -1,5 +1,5 @@
 TARGET = PSP-BookReader
-OBJS = src/core/main.o src/core/debug_logger.o lib/pugixml/pugixml.o lib/miniz/miniz.o src/epub/epub_reader.o src/input/input_handler.o src/renderer/text_renderer.o src/renderer/cover_renderer.o src/parser/html_text_extractor.o lib/libintrafont/intraFont.o lib/libintrafont/libccc.o
+OBJS = src/core/main.o src/core/debug_logger.o lib/pugixml/pugixml.o lib/miniz/miniz.o src/epub/epub_reader.o src/input/input_handler.o src/renderer/text_renderer.o src/renderer/cover_renderer.o src/parser/html_text_extractor.o src/library/library_manager.o lib/libintrafont/intraFont.o lib/libintrafont/libccc.o
 
 INCDIR = include lib/pugixml lib/miniz lib/libintrafont $(shell psp-config --psp-prefix)/include/SDL2
 CFLAGS = -O2 -G0 -Wall
