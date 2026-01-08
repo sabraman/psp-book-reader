@@ -1,0 +1,16 @@
+PSP-BookReader/
+├── Makefile
+├── README.md
+├── src/
+│   ├── core/          # Main entry point
+│   │   └── main.cpp
+│   ├── epub/          # EPUB parsing (ZIP + XML)
+│   ├── renderer/      # Text rendering + GU
+│   └── input/         # Controller input
+├── include/           # Header files
+│   ├── types.h
+│   └── epub_reader.h
+└── lib/               # Third-party libraries
+    ├── miniz/         # ZIP reader
+    ├── tinyxml2/      # XML parser
+    └── freetype/      # Font rendering

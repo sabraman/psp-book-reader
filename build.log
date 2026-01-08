@@ -1,0 +1,22 @@
+psp-g++ -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -D_PSP_FW_VERSION=600   -c -o src/core/main.o src/core/main.cpp
+psp-g++ -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -D_PSP_FW_VERSION=600   -c -o lib/pugixml/pugixml.o lib/pugixml/pugixml.cpp
+psp-gcc -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -D_PSP_FW_VERSION=600   -c -o lib/miniz/miniz.o lib/miniz/miniz.c
+lib/miniz/miniz.c:3185:9: note: '#pragma message: Using fopen, ftello, fseeko, stat() etc. path for file I/O - this path may not support large files.'
+ 3185 | #pragma message("Using fopen, ftello, fseeko, stat() etc. path for file I/O - this path may not support large files.")
+      |         ^~~~~~~
+psp-g++ -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -D_PSP_FW_VERSION=600   -c -o src/epub/epub_reader.o src/epub/epub_reader.cpp
+src/epub/epub_reader.cpp: In constructor 'EpubReader::EpubReader()':
+src/epub/epub_reader.cpp:8:9: warning: 'void* memset(void*, int, size_t)' clearing an object of type 'struct EpubMetadata' with no trivial copy-assignment; use assignment or value-initialization instead [-Wclass-memaccess]
+    8 |   memset(&metadata, 0, sizeof(metadata));
+      |   ~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from src/epub/epub_reader.cpp:1:
+include/epub_reader.h:14:8: note: 'struct EpubMetadata' declared here
+   14 | struct EpubMetadata {
+      |        ^~~~~~~~~~~~
+psp-g++ -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -Iinclude -Ilib/pugixml -Ilib/miniz -I. -I/Users/sabraman/pspdev/psp/include -I/Users/sabraman/pspdev/psp/sdk/include -O2 -G0 -Wall -D_PSP_FW_VERSION=600   -c -o src/renderer/text_renderer.o src/renderer/text_renderer.cpp
+In file included from src/renderer/text_renderer.cpp:1:
+include/text_renderer.h:4:10: fatal error: ft2build.h: No such file or directory
+    4 | #include <ft2build.h>
+      |          ^~~~~~~~~~~~
+compilation terminated.
+make: *** [src/renderer/text_renderer.o] Error 1
