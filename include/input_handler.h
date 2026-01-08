@@ -18,6 +18,14 @@ public:
   bool NextPage();
   bool PrevPage();
   bool Exit();
+  bool TrianglePressed();
+  bool CirclePressed();
+  bool SelectPressed();
+  bool UpPressed();
+  bool DownPressed();
+  bool CrossPressed();
+  bool LTriggerPressed();
+  bool RTriggerPressed();
 
 private:
   SceCtrlData currentPad;

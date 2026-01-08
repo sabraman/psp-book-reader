@@ -1,0 +1,6 @@
+*.o
+*.elf
+*.PBP
+PARAM.SFO
+debug.log
+.DS_Store

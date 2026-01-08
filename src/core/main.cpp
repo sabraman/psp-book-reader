@@ -1,25 +1,70 @@
+#include "debug_logger.h"
 #include "epub_reader.h"
+#include "html_text_extractor.h"
 #include "input_handler.h"
 #include "text_renderer.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <pspctrl.h>
 #include <pspdebug.h>
 #include <pspdisplay.h>
 #include <pspgu.h>
 #include <pspgum.h>
 #include <pspkernel.h>
+#include <psppower.h>
+#include <psprtc.h>
+#include <string>
+#include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// PSP Screen Dimensions
+#define SCREEN_WIDTH 480
+#define SCREEN_HEIGHT 272
+#define BUFFER_WIDTH 512
+
+// PSP Button Glyphs
+#define ICON_CROSS "\x7c"
+#define ICON_CIRCLE "\x7d"
+#define ICON_TRIANGLE "\x7e"
+#define ICON_SQUARE "\x7f"
+#define ICON_L "\xEF\x80\x80"
+#define ICON_R "\xEF\x80\x81"
+#define ICON_SELECT "\xEF\x80\x82"
+#define ICON_START "\xEF\x80\x83"
+#define ICON_DPAD "\xEF\x80\x84"
+#define ICON_UP "\xEF\x80\x85"
+#define ICON_DOWN "\xEF\x80\x86"
+#define ICON_LEFT "\xEF\x80\x87"
+#define ICON_RIGHT "\xEF\x80\x88"
+
+// Reader Constraints
+#define MAX_CHAPTER_LINES 5000
+#define MAX_WORDS 20000
+#define WORD_BUFFER_SIZE 262144
+#define MAX_LINE_LEN 256
+
+static char chapterLines[MAX_CHAPTER_LINES][MAX_LINE_LEN];
+static int totalLines = 0;
+static int currentLine = 0;
+static float fontScale = 1.0f;
+static bool isRotated = false;
+static bool showChapterMenu = false;
+static bool showStatusOverlay = false;
+static int linesPerPage = 12;
+
+static char *words[MAX_WORDS];
+static char wordBuffer[WORD_BUFFER_SIZE];
 
 PSP_MODULE_INFO("PSP-BookReader", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 
-#define BUFFER_WIDTH 512
-#define SCREEN_WIDTH 480
-#define SCREEN_HEIGHT 272
-
-// Display list for GU
 unsigned int __attribute__((aligned(16))) list[262144];
-
-// Exit callback setup
 int running = 0;
 
 int exit_callback(int arg1, int arg2, void *common) {
@@ -50,7 +95,6 @@ void initGu() {
   sceGuDepthBuffer((void *)0x110000, BUFFER_WIDTH);
   sceGuOffset(2048 - (SCREEN_WIDTH / 2), 2048 - (SCREEN_HEIGHT / 2));
   sceGuViewport(2048, 2048, SCREEN_WIDTH, SCREEN_HEIGHT);
-  sceGuDepthRange(65535, 0);
   sceGuScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
   sceGuEnable(GU_SCISSOR_TEST);
   sceGuDisable(GU_DEPTH_TEST);
@@ -62,9 +106,8 @@ void initGu() {
 
 void startFrame() {
   sceGuStart(GU_DIRECT, list);
-  sceGuClearColor(0xFF000000); // Black background
-  sceGuClearDepth(0);
-  sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+  sceGuClearColor(0xFF000000);
+  sceGuClear(GU_COLOR_BUFFER_BIT);
 }
 
 void endFrame() {
@@ -74,96 +117,222 @@ void endFrame() {
   sceGuSwapBuffers();
 }
 
+void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
+                  TextRenderer &renderer, int chapterIndex) {
+  uint8_t *data = reader.LoadChapter(chapterIndex);
+  if (!data)
+    return;
+
+  int wordCount = extractor.ExtractWords((char *)data, words, MAX_WORDS,
+                                         wordBuffer, WORD_BUFFER_SIZE);
+  free(data);
+
+  totalLines = 0;
+  memset(chapterLines, 0, sizeof(chapterLines));
+
+  int margin = 20;
+  int maxWidth =
+      isRotated ? (SCREEN_HEIGHT - 2 * margin) : (SCREEN_WIDTH - 2 * margin);
+  std::string currentLineStr = "";
+
+  auto pushLine = [&](const std::string &line) {
+    if (totalLines < MAX_CHAPTER_LINES) {
+      strncpy(chapterLines[totalLines], line.c_str(), MAX_LINE_LEN - 1);
+      chapterLines[totalLines][MAX_LINE_LEN - 1] = '\0';
+      totalLines++;
+    }
+  };
+
+  for (int i = 0; i < wordCount; i++) {
+    if (strcmp(words[i], "\n") == 0) {
+      pushLine(currentLineStr);
+      currentLineStr = "";
+      continue;
+    }
+
+    std::string testLine =
+        currentLineStr.empty() ? words[i] : (currentLineStr + " " + words[i]);
+    int width = renderer.MeasureTextWidth(testLine.c_str());
+
+    if (width > maxWidth && !currentLineStr.empty()) {
+      pushLine(currentLineStr);
+      currentLineStr = words[i];
+    } else {
+      currentLineStr = testLine;
+    }
+    if (totalLines >= MAX_CHAPTER_LINES)
+      break;
+  }
+  if (!currentLineStr.empty())
+    pushLine(currentLineStr);
+
+  float baseLineHeight = 18.0f;
+  int lineHeight = (int)(baseLineHeight * fontScale);
+  if (lineHeight < 8)
+    lineHeight = 8;
+
+  int availableHeight = isRotated ? (SCREEN_WIDTH - 80) : (SCREEN_HEIGHT - 80);
+  linesPerPage = availableHeight / lineHeight;
+  if (linesPerPage < 1)
+    linesPerPage = 1;
+
+  DebugLogger::Log(
+      "Layout Updated: Chapter %d, %d lines, Rotated: %d, Scale: %.2f",
+      chapterIndex, totalLines, isRotated, fontScale);
+}
+
 int main(int argc, char *argv[]) {
+  DebugLogger::Init();
   setup_callbacks();
   initGu();
 
-  // Initialize text renderer with Inter font
   TextRenderer renderer;
   renderer.Initialize();
-  bool fontLoaded = renderer.LoadFont(1.0f);
+  renderer.LoadFont(fontScale);
 
-  // Load EPUB
   EpubReader reader;
-  bool epubLoaded = reader.Open("epub-with-cyrillic.epub");
+  reader.Open("epub-with-cyrillic.epub");
+  const EpubMetadata &meta = reader.GetMetadata();
+
+  HtmlTextExtractor htmlExtractor;
+  int currentChapter = 0;
+  updateLayout(htmlExtractor, reader, renderer, currentChapter);
 
   InputHandler input;
   running = 1;
 
-  int y = 10;
-
   while (running) {
     input.Update();
-
-    if (input.Exit()) {
+    if (input.Exit())
       break;
-    }
 
-    startFrame();
+    bool layoutNeedsUpdate = false;
 
-    // Enable GU for 2D rendering
-    sceGuEnable(GU_BLEND);
-    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
-    sceGuTexMode(GU_PSM_T8, 0, 0, 0);
-    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-
-    // Render text
-    y = 10;
-
-    if (fontLoaded) {
-      renderer.RenderText("PSP-BookReader v0.3", 10, y, 0xFFFFFFFF);
-      y += 25;
-      renderer.RenderText("Inter Font + Cyrillic!", 10, y, 0xFF00FFFF);
-      y += 25;
-      renderer.RenderText("======================", 10, y, 0xFFFFFFFF);
-      y += 30;
-    }
-
-    if (epubLoaded) {
-      const EpubMetadata &meta = reader.GetMetadata();
-
-      if (fontLoaded) {
-        renderer.RenderText("EPUB Loaded!", 10, y, 0xFF00FF00);
-        y += 25;
-        y += 10;
-
-        // Display title with Cyrillic support
-        char titleBuf[256];
-        snprintf(titleBuf, sizeof(titleBuf), "Title: %s", meta.title);
-        renderer.RenderText(titleBuf, 10, y, 0xFFFFFF00);
-        y += 20;
-
-        // Display author
-        char authorBuf[256];
-        snprintf(authorBuf, sizeof(authorBuf), "Author: %s", meta.author);
-        renderer.RenderText(authorBuf, 10, y, 0xFFFFFF00);
-        y += 20;
-
-        // Display chapter count
-        char chapterBuf[128];
-        snprintf(chapterBuf, sizeof(chapterBuf), "Chapters: %d",
-                 (int)meta.spine.size());
-        renderer.RenderText(chapterBuf, 10, y, 0xFFFFFF00);
-        y += 30;
-
-        // Show first few chapters
-        renderer.RenderText("First chapters:", 10, y, 0xFFFFFFFF);
-        y += 20;
-
-        int showCount = meta.spine.size() < 5 ? meta.spine.size() : 5;
-        for (int i = 0; i < showCount; i++) {
-          char chBuf[256];
-          snprintf(chBuf, sizeof(chBuf), "  %d. %s", i + 1, meta.spine[i].href);
-          renderer.RenderText(chBuf, 10, y, 0xFFCCCCCC);
-          y += 18;
+    if (showChapterMenu) {
+      static int menuSelection = 0;
+      if (input.UpPressed())
+        menuSelection = std::max(0, menuSelection - 1);
+      if (input.DownPressed())
+        menuSelection = std::min((int)meta.spine.size() - 1, menuSelection + 1);
+      if (input.CrossPressed()) {
+        currentChapter = menuSelection;
+        layoutNeedsUpdate = true;
+        currentLine = 0;
+        showChapterMenu = false;
+      }
+      if (input.TrianglePressed())
+        showChapterMenu = false;
+    } else {
+      if (input.NextPage()) {
+        if (currentLine + linesPerPage < totalLines)
+          currentLine += linesPerPage;
+        else if (currentChapter < (int)meta.spine.size() - 1) {
+          currentChapter++;
+          layoutNeedsUpdate = true;
+          currentLine = 0;
         }
+      }
+      if (input.PrevPage()) {
+        if (currentLine >= linesPerPage)
+          currentLine -= linesPerPage;
+        else if (currentChapter > 0) {
+          currentChapter--;
+          updateLayout(htmlExtractor, reader, renderer, currentChapter);
+          currentLine = ((totalLines - 1) / linesPerPage) * linesPerPage;
+          if (currentLine < 0)
+            currentLine = 0;
+        }
+      }
+      if (input.CirclePressed()) {
+        isRotated = !isRotated;
+        layoutNeedsUpdate = true;
+        currentLine = 0;
+      }
+      if (input.SelectPressed())
+        showStatusOverlay = !showStatusOverlay;
+      if (input.TrianglePressed())
+        showChapterMenu = true;
+
+      if (input.UpPressed()) {
+        fontScale = std::min(3.0f, fontScale + 0.1f);
+        renderer.LoadFont(fontScale);
+        layoutNeedsUpdate = true;
+      }
+      if (input.DownPressed()) {
+        fontScale = std::max(0.4f, fontScale - 0.1f);
+        renderer.LoadFont(fontScale);
+        layoutNeedsUpdate = true;
       }
     }
 
-    y = SCREEN_HEIGHT - 25;
-    if (fontLoaded) {
-      renderer.RenderText("Press START to exit", 10, y, 0xFF888888);
+    if (layoutNeedsUpdate)
+      updateLayout(htmlExtractor, reader, renderer, currentChapter);
+
+    startFrame();
+    sceGuEnable(GU_BLEND);
+    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+
+    auto drawUI = [&](const char *text, int tx, int ty, uint32_t color) {
+      if (isRotated) {
+        // Restore logic that "worked fine" before: (SCREEN_WIDTH - ty, tx)
+        // This corresponds to a Clockwise rotation mapping.
+        // Angle 90.0 maps text to run Top-to-Bottom in landscape =
+        // Left-to-Right in portrait.
+        intraFontSetStyle(renderer.GetFont(), fontScale, color, 0, 90.0f, 0);
+        intraFontPrint(renderer.GetFont(), (float)(SCREEN_WIDTH - ty),
+                       (float)tx, text);
+      } else {
+        intraFontSetStyle(renderer.GetFont(), fontScale, color, 0, 0.0f, 0);
+        intraFontPrint(renderer.GetFont(), (float)tx, (float)ty, text);
+      }
+    };
+
+    // Header
+    char header[256];
+    snprintf(header, 256, "%s - Ch %d/%d", meta.title, currentChapter + 1,
+             (int)meta.spine.size());
+    drawUI(header, 16, 30, 0xFF00FFFF);
+
+    // Content
+    int yStart = 66;
+    int stepY = (int)(20.0f * fontScale);
+    if (stepY < 12)
+      stepY = 12;
+
+    for (int i = 0; i < linesPerPage && (currentLine + i) < totalLines; i++) {
+      drawUI(chapterLines[currentLine + i], 16, yStart + i * stepY, 0xFFFFFFFF);
+    }
+
+    // Footer
+    char footer[256];
+    int p = (currentLine / linesPerPage) + 1;
+    int maxP = (totalLines + linesPerPage - 1) / linesPerPage;
+    snprintf(footer, 256,
+             "Page %d/%d | Scale %.1f | " ICON_LEFT ICON_RIGHT " Turn", p,
+             std::max(1, maxP), fontScale);
+    drawUI(footer, 16, isRotated ? 464 : 260, 0xFF888888);
+
+    if (showStatusOverlay) {
+      ScePspDateTime ptime;
+      sceRtcGetCurrentClockLocalTime(&ptime);
+      int batt = scePowerGetBatteryLifePercent();
+      char status[128];
+      snprintf(status, 128, "Time: %02d:%02d | Battery: %d%%", ptime.hour,
+               ptime.minute, batt);
+      drawUI(status, 16, isRotated ? 440 : 235, 0xFF00FF00);
+      drawUI(ICON_SELECT " Status | " ICON_TRIANGLE " Menu | " ICON_CIRCLE
+                         " Rotate",
+             16, isRotated ? 420 : 215, 0xFF00AAAA);
+    }
+
+    if (showChapterMenu) {
+      drawUI("=== CHAPTER SELECT ===", 40, 60, 0xFF00FFFF);
+      for (int i = 0; i < (int)meta.spine.size() && i < 15; i++) {
+        drawUI(meta.spine[i].id, 50, 85 + i * 18,
+               (i == currentChapter) ? 0xFF00FF00 : 0xFFFFFFFF);
+      }
+      drawUI(ICON_CROSS " Select | " ICON_TRIANGLE " Back", 40,
+             isRotated ? 400 : 200, 0xFF00AAAA);
     }
 
     endFrame();
@@ -171,6 +340,7 @@ int main(int argc, char *argv[]) {
 
   renderer.Shutdown();
   reader.Close();
+  DebugLogger::Close();
   sceGuTerm();
   sceKernelExitGame();
   return 0;

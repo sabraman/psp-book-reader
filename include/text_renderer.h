@@ -12,7 +12,7 @@ public:
   void Shutdown();
 
   // Load font (uses firmware fonts from flash0:/font/)
-  bool LoadFont(int fontSize = 16);
+  bool LoadFont(float scale = 1.0f);
 
   // Render text to screen using libintraFont
   void RenderText(const char *text, int x, int y, uint32_t color);
@@ -20,7 +20,10 @@ public:
   // Measure text dimensions
   int MeasureTextWidth(const char *text);
 
+  // Advanced: Get raw font pointer
+  intraFont *GetFont() { return font; }
+
 private:
   intraFont *font;
-  int fontSize;
+  float fontScale;
 };
