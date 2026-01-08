@@ -1,10 +1,12 @@
 #pragma once
 
 #include <stdint.h>
+#include <string>
 #include <vector>
 
 struct ChapterInfo {
   char id[64];
+  char title[128];
   char href[128];
   uint32_t zipOffset;
   uint32_t compSize;
@@ -36,5 +38,5 @@ private:
   EpubMetadata metadata;
 
   bool ReadContainerXml(char *outPath);
-  bool ParseContentOpf(const uint8_t *data);
+  bool ParseContentOpf(const uint8_t *data, const std::string &rootDir);
 };

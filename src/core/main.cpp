@@ -45,6 +45,8 @@ static bool isRotated = false;
 static bool showChapterMenu = false;
 static bool showStatusOverlay = false;
 static int linesPerPage = 10;
+static int menuSelection = 0;
+static int menuScroll = 0;
 
 static char *words[MAX_WORDS];
 static TextStyle wordStyles[MAX_WORDS];
@@ -52,7 +54,6 @@ static char wordBuffer[WORD_BUFFER_SIZE];
 
 int running = 0;
 
-// Simple case-insensitive search for PSP
 const char *findStringInsensitive(const char *haystack, const char *needle) {
   if (!haystack || !needle || !*needle)
     return NULL;
@@ -69,50 +70,38 @@ bool isRedundantMetadata(const char *text, const EpubMetadata &meta) {
   if (!text || strlen(text) < 3)
     return false;
 
-  // Strict exact match for title/author is always safe to skip
+  // Strict match for title/author
   if (strcasecmp(text, meta.title) == 0)
     return true;
   if (strcasecmp(text, meta.author) == 0)
     return true;
 
-  // Check if the line is noise like "Cover of..."
-  if (findStringInsensitive(text, "Cover of"))
-    return true;
-
-  // If the line contains title or author but is short, it's likely just noise
-  if (findStringInsensitive(text, meta.author) ||
-      findStringInsensitive(text, meta.title)) {
+  // Partially redundant book title/author at the top of pages (e.g. "Моби Дик"
+  // in "Моби Дик, или Белый Кит")
+  if (findStringInsensitive(text, meta.title) ||
+      findStringInsensitive(text, meta.author) ||
+      findStringInsensitive(
+          meta.title, text)) { // Also check if text is a substring of title
     int textLen = strlen(text);
-    int metaTitleLen = strlen(meta.title);
-    int metaAuthorLen = strlen(meta.author);
-
-    // Threshold: if it's not much longer than the meta itself, it's likely
-    // noise
-    if (textLen < metaTitleLen + 10 || textLen < metaAuthorLen + 10) {
+    if (textLen < (int)strlen(meta.title) + 15 ||
+        textLen < (int)strlen(meta.author) + 15) {
       return true;
     }
   }
 
+  if (findStringInsensitive(text, "Cover of"))
+    return true;
   return false;
 }
 
 void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
                   TextRenderer &renderer, int chapterIndex) {
+  if (chapterIndex < 0)
+    return;
   DebugLogger::Log("Updating Layout: Ch %d, Rot: %d", chapterIndex, isRotated);
-
-  // Size-aware extraction to avoid reading past end of buffer (fixes "wtf is
-  // that" garbage/vertical bars)
-  size_t dataSize = 0;
   uint8_t *raw_data = reader.LoadChapter(chapterIndex);
   if (!raw_data)
     return;
-
-  // We need to null-terminate it because ExtractWords is character-based
-  // and mz_zip_reader_extract_file_to_heap doesn't append null.
-  // We'll actually modify EpubReader slightly or handle it here
-  // Actually, EpubReader should really provide the size.
-  // For now, let's look for a better way or just trust LoadChapter for now but
-  // add a cap.
 
   int wordCount =
       extractor.ExtractWords((char *)raw_data, words, wordStyles, MAX_WORDS,
@@ -121,12 +110,10 @@ void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
 
   totalLines = 0;
   memset(chapterLines, 0, sizeof(chapterLines));
-
   int maxWidth = isRotated ? (SCREEN_HEIGHT - 2 * LAYOUT_MARGIN)
                            : (SCREEN_WIDTH - 2 * LAYOUT_MARGIN);
   std::string currentLineStr = "";
   TextStyle currentLineStyle = TextStyle::NORMAL;
-
   const EpubMetadata &meta = reader.GetMetadata();
 
   auto pushLine = [&](const std::string &line, TextStyle style) {
@@ -134,10 +121,10 @@ void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
       if (line.empty() || (line.length() == 1 && line[0] == ' '))
         return;
 
-      // Aggressive metadata filtering for the first few section pages
-      if (chapterIndex <= 1 && totalLines < 20) {
+      // Aggressive filtering of redundant metadata at the start of chapters
+      if (totalLines < 20) {
         if (isRedundantMetadata(line.c_str(), meta)) {
-          return; // Skip repeated title/author noise
+          return;
         }
       }
 
@@ -155,17 +142,14 @@ void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
       currentLineStr = "";
       continue;
     }
-
     if (wordStyles[i] != currentLineStyle && !currentLineStr.empty()) {
       pushLine(currentLineStr, currentLineStyle);
       currentLineStr = "";
     }
     currentLineStyle = wordStyles[i];
-
     std::string testLine =
         currentLineStr.empty() ? words[i] : (currentLineStr + " " + words[i]);
     int width = renderer.MeasureTextWidth(testLine.c_str(), currentLineStyle);
-
     if (width > maxWidth && !currentLineStr.empty()) {
       pushLine(currentLineStr, currentLineStyle);
       currentLineStr = words[i];
@@ -178,15 +162,14 @@ void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
   if (!currentLineStr.empty())
     pushLine(currentLineStr, currentLineStyle);
 
-  // Skip the entire chapter if it's just metadata noise (often Chapter 0)
-  if (chapterIndex == 0 && totalLines < 5) {
+  // Smart skip for technical/dummy chapters
+  if (chapterIndex <= 1 && totalLines < 5) {
     bool allMeta = true;
-    for (int i = 0; i < totalLines; i++) {
+    for (int i = 0; i < totalLines; i++)
       if (!isRedundantMetadata(chapterLines[i].text, meta))
         allMeta = false;
-    }
     if (allMeta) {
-      DebugLogger::Log("Skipping entire empty/meta Chapter 0");
+      DebugLogger::Log("Auto-skipping noise chapter: %d", chapterIndex);
       totalLines = 0;
     }
   }
@@ -237,8 +220,10 @@ int main(int argc, char *argv[]) {
 
   InputHandler input;
   running = 1;
+  uint32_t frameCount = 0;
 
   while (running) {
+    frameCount++;
     input.Update();
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_QUIT)
@@ -251,11 +236,17 @@ int main(int argc, char *argv[]) {
 
     bool layoutNeedsUpdate = false;
     if (showChapterMenu) {
-      static int menuSelection = 0;
-      if (input.UpPressed())
+      int visibleMax = isRotated ? 15 : 10;
+      if (input.UpPressed()) {
         menuSelection = std::max(0, menuSelection - 1);
-      if (input.DownPressed())
+        if (menuSelection < menuScroll)
+          menuScroll = menuSelection;
+      }
+      if (input.DownPressed()) {
         menuSelection = std::min((int)meta.spine.size() - 1, menuSelection + 1);
+        if (menuSelection >= menuScroll + visibleMax)
+          menuScroll = menuSelection - visibleMax + 1;
+      }
       if (input.CrossPressed()) {
         currentChapter = menuSelection;
         layoutNeedsUpdate = true;
@@ -269,7 +260,7 @@ int main(int argc, char *argv[]) {
       if (input.NextPage()) {
         if (currentChapter == -1) {
           currentChapter = 0;
-          // If Ch 0 was skipped (meta only), jump to Ch 1
+          updateLayout(htmlExtractor, reader, renderer, 0);
           if (totalLines == 0) {
             currentChapter = 1;
             layoutNeedsUpdate = true;
@@ -293,8 +284,6 @@ int main(int argc, char *argv[]) {
         } else if (currentChapter > 0) {
           currentChapter--;
           updateLayout(htmlExtractor, reader, renderer, currentChapter);
-
-          // Reverse skip Chapter 0 if empty
           if (currentChapter == 0 && totalLines == 0) {
             currentChapter = -1;
             renderer.ClearCache();
@@ -316,8 +305,11 @@ int main(int argc, char *argv[]) {
       }
       if (input.SelectPressed())
         showStatusOverlay = !showStatusOverlay;
-      if (input.TrianglePressed())
+      if (input.TrianglePressed()) {
         showChapterMenu = true;
+        menuSelection = (currentChapter < 0) ? 0 : currentChapter;
+        menuScroll = std::max(0, menuSelection - 3);
+      }
 
       if (input.UpPressed()) {
         fontScale = std::min(3.0f, fontScale + 0.1f);
@@ -364,11 +356,13 @@ int main(int argc, char *argv[]) {
         renderer.RenderTextCentered("1", 250, 0xFF888888, TextStyle::SMALL,
                                     0.0f);
     } else {
+      // Show specific chapter title in the header
+      const char *headerTitle = meta.spine[currentChapter].title;
       if (isRotated)
-        renderer.RenderTextCentered(meta.title, 10, 0xFF888888,
+        renderer.RenderTextCentered(headerTitle, 10, 0xFF888888,
                                     TextStyle::SMALL, 90.0f);
       else
-        renderer.RenderTextCentered(meta.title, 10, 0xFF888888,
+        renderer.RenderTextCentered(headerTitle, 10, 0xFF888888,
                                     TextStyle::SMALL, 0.0f);
 
       int stepY = (int)(LAYOUT_LINE_SPACE * fontScale);
@@ -417,19 +411,50 @@ int main(int argc, char *argv[]) {
     }
 
     if (showChapterMenu) {
-      SDL_SetRenderDrawColor(sdlRenderer, 20, 20, 20, 230);
-      SDL_Rect menuRect = {30, 40, isRotated ? 212 : 420,
-                           isRotated ? 400 : 200};
-      SDL_RenderFillRect(sdlRenderer, &menuRect);
-      drawUI("=== CHAPTER SELECT ===", 40, 50, 0xFF00FFFF);
-      for (int i = 0; i < (int)meta.spine.size() && i < 15; i++) {
-        char displayId[32];
-        strncpy(displayId, meta.spine[i].id, 16);
-        displayId[16] = '\0';
-        drawUI(displayId, 50, 75 + i * 20,
-               (i == currentChapter) ? 0xFF00FF00 : 0xFFFFFFFF,
-               TextStyle::NORMAL);
+      SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 230);
+      SDL_Rect overlay = {0, 0, 480, 272};
+      SDL_RenderFillRect(sdlRenderer, &overlay);
+
+      int menuX = isRotated ? 100 : 40;
+      int menuY = isRotated ? 40 : 40;
+      int menuWidth = isRotated ? 272 : 400;
+      int visibleMax = isRotated ? 15 : 12;
+
+      for (int i = 0;
+           i < visibleMax && (menuScroll + i) < (int)meta.spine.size(); i++) {
+        int idx = menuScroll + i;
+        uint32_t color = (idx == menuSelection) ? 0xFFFFFFFF : 0xFF888888;
+
+        if (idx == menuSelection) {
+          float pulse = (sinf(frameCount * 0.15f) + 1.0f) * 0.5f;
+          uint8_t alpha = 80 + (uint8_t)(pulse * 175);
+          SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255, alpha / 8);
+          SDL_Rect selRect = {menuX - 10, menuY + i * 18 - 2, menuWidth + 20,
+                              18};
+          if (isRotated)
+            selRect = {SCREEN_WIDTH - (menuY + i * 18 + 14), menuX - 10, 18,
+                       menuWidth + 20};
+          SDL_RenderFillRect(sdlRenderer, &selRect);
+        }
+
+        const char *title = meta.spine[idx].title;
+        char trimTitle[64];
+        strncpy(trimTitle, title, 63);
+        trimTitle[63] = '\0';
+
+        if (isRotated)
+          renderer.RenderText(trimTitle, SCREEN_WIDTH - (menuY + i * 18), menuX,
+                              color, TextStyle::NORMAL, 90.0f);
+        else
+          renderer.RenderText(trimTitle, menuX, menuY + i * 18, color,
+                              TextStyle::NORMAL, 0.0f);
       }
+
+      if (menuScroll > 0)
+        drawUI("^", menuX + menuWidth / 2, menuY - 15, 0xFFFFFFFF);
+      if (menuScroll + visibleMax < (int)meta.spine.size())
+        drawUI("v", menuX + menuWidth / 2, menuY + visibleMax * 18, 0xFFFFFFFF);
     }
 
     SDL_RenderPresent(sdlRenderer);
