@@ -1,29 +1,57 @@
 #pragma once
 
-#include "types.h"
-#include <intraFont.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
+#include <stdint.h>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+enum class TextStyle {
+  NORMAL,
+  H1,    // Large header
+  H2,    // Medium header
+  H3,    // Small header
+  TITLE, // Very large for title page
+  SMALL  // For footer/status
+};
 
 class TextRenderer {
 public:
   TextRenderer();
   ~TextRenderer();
 
-  bool Initialize();
+  bool Initialize(SDL_Renderer *sdlRenderer);
   void Shutdown();
 
-  // Load font (uses firmware fonts from flash0:/font/)
-  bool LoadFont(float scale = 1.0f);
+  bool LoadFont(float scale);
 
-  // Render text to screen using libintraFont
-  void RenderText(const char *text, int x, int y, uint32_t color);
+  void RenderText(const char *text, int x, int y, uint32_t color,
+                  TextStyle style = TextStyle::NORMAL, float angle = 0.0f);
 
-  // Measure text dimensions
-  int MeasureTextWidth(const char *text);
+  void RenderTextCentered(const char *text, int y, uint32_t color,
+                          TextStyle style = TextStyle::NORMAL,
+                          float angle = 0.0f);
 
-  // Advanced: Get raw font pointer
-  intraFont *GetFont() { return font; }
+  int MeasureTextWidth(const char *text, TextStyle style = TextStyle::NORMAL);
+
+  float GetFontScale() const { return fontScale; }
+
+  void ClearCache();
 
 private:
-  intraFont *font;
+  SDL_Renderer *renderer;
+  std::unordered_map<TextStyle, TTF_Font *> fonts;
   float fontScale;
+
+  struct CachedTexture {
+    SDL_Texture *texture;
+    int w, h;
+  };
+
+  // Cache key will now include the style
+  std::unordered_map<std::string, CachedTexture> cache;
+
+  void CleanupCache();
+  std::string GetCacheKey(const char *text, TextStyle style);
 };

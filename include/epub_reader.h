@@ -14,6 +14,7 @@ struct ChapterInfo {
 struct EpubMetadata {
   char title[128];
   char author[128];
+  char coverHref[128];
   std::vector<ChapterInfo> spine;
 };
 
@@ -28,6 +29,7 @@ public:
 
   const EpubMetadata &GetMetadata() const { return metadata; }
   uint8_t *LoadChapter(int chapterIndex);
+  uint8_t *LoadCover(size_t *outSize);
 
 private:
   void *zipArchive;

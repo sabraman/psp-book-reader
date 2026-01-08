@@ -106,10 +106,31 @@ bool EpubReader::ParseContentOpf(const uint8_t *data) {
           127);
   strncpy(metadata.author, metadataNode.child("dc:creator").text().as_string(),
           127);
+  metadata.coverHref[0] = '\0';
 
-  // Parse spine (reading order)
+  // Find cover (EPUB 2 meta or EPUB 3 property)
+  const char *coverId = "";
+  for (pugi::xml_node meta : metadataNode.children("meta")) {
+    if (strcmp(meta.attribute("name").value(), "cover") == 0) {
+      coverId = meta.attribute("content").value();
+      break;
+    }
+  }
+
+  // Parse spine and cover href
   pugi::xml_node spine = package.child("spine");
   pugi::xml_node manifest = package.child("manifest");
+
+  for (pugi::xml_node item : manifest.children("item")) {
+    const char *itemId = item.attribute("id").value();
+    const char *itemHref = item.attribute("href").value();
+    const char *itemProps = item.attribute("properties").value();
+
+    if (strcmp(itemId, coverId) == 0 ||
+        (itemProps && strstr(itemProps, "cover-image"))) {
+      strncpy(metadata.coverHref, itemHref, 127);
+    }
+  }
 
   for (pugi::xml_node itemref : spine.children("itemref")) {
     const char *idref = itemref.attribute("idref").value();
@@ -155,5 +176,27 @@ uint8_t *EpubReader::LoadChapter(int chapterIndex) {
   uint8_t *chapterData = (uint8_t *)mz_zip_reader_extract_file_to_heap(
       zip, chapter.href, &chapterSize, 0);
 
-  return chapterData;
+  if (chapterData) {
+    // Reallocate to add null terminator for safety
+    uint8_t *terminated = (uint8_t *)realloc(chapterData, chapterSize + 1);
+    if (terminated) {
+      terminated[chapterSize] = '\0';
+      return terminated;
+    }
+    return chapterData; // Fallback
+  }
+
+  return nullptr;
+}
+
+uint8_t *EpubReader::LoadCover(size_t *outSize) {
+  if (!zipArchive || strlen(metadata.coverHref) == 0) {
+    return nullptr;
+  }
+
+  mz_zip_archive *zip = (mz_zip_archive *)zipArchive;
+  uint8_t *coverData = (uint8_t *)mz_zip_reader_extract_file_to_heap(
+      zip, metadata.coverHref, outSize, 0);
+
+  return coverData;
 }
