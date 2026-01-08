@@ -49,6 +49,11 @@
 #define WORD_BUFFER_SIZE 262144
 #define MAX_LINE_LEN 256
 
+// Reader Layout Constants
+#define LAYOUT_MARGIN 20
+#define LAYOUT_START_Y 66
+#define LAYOUT_LINE_SPACE 22.0f
+
 static char chapterLines[MAX_CHAPTER_LINES][MAX_LINE_LEN];
 static int totalLines = 0;
 static int currentLine = 0;
@@ -130,9 +135,8 @@ void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
   totalLines = 0;
   memset(chapterLines, 0, sizeof(chapterLines));
 
-  int margin = 20;
-  int maxWidth =
-      isRotated ? (SCREEN_HEIGHT - 2 * margin) : (SCREEN_WIDTH - 2 * margin);
+  int maxWidth = isRotated ? (SCREEN_HEIGHT - 2 * LAYOUT_MARGIN)
+                           : (SCREEN_WIDTH - 2 * LAYOUT_MARGIN);
   std::string currentLineStr = "";
 
   auto pushLine = [&](const std::string &line) {
@@ -166,12 +170,14 @@ void updateLayout(HtmlTextExtractor &extractor, EpubReader &reader,
   if (!currentLineStr.empty())
     pushLine(currentLineStr);
 
-  float baseLineHeight = 18.0f;
-  int lineHeight = (int)(baseLineHeight * fontScale);
-  if (lineHeight < 8)
-    lineHeight = 8;
+  int lineHeight = (int)(LAYOUT_LINE_SPACE * fontScale);
+  if (lineHeight < 10)
+    lineHeight = 10;
 
-  int availableHeight = isRotated ? (SCREEN_WIDTH - 80) : (SCREEN_HEIGHT - 80);
+  // Portrait Height is 480, Landscape is 272.
+  // We start at LAYOUT_START_Y (66) and must leave room for footer at bottom.
+  int availableHeight =
+      (isRotated ? SCREEN_WIDTH : SCREEN_HEIGHT) - LAYOUT_START_Y - 45;
   linesPerPage = availableHeight / lineHeight;
   if (linesPerPage < 1)
     linesPerPage = 1;
@@ -289,27 +295,41 @@ int main(int argc, char *argv[]) {
 
     // Header
     char header[256];
-    snprintf(header, 256, "%s - Ch %d/%d", meta.title, currentChapter + 1,
-             (int)meta.spine.size());
+    if (isRotated) {
+      // Shorten for 272px width
+      char shortTitle[32];
+      strncpy(shortTitle, meta.title, 16);
+      shortTitle[16] = '\0';
+      snprintf(header, 256, "%s.. C%d/%d", shortTitle, currentChapter + 1,
+               (int)meta.spine.size());
+    } else {
+      snprintf(header, 256, "%s - Ch %d/%d", meta.title, currentChapter + 1,
+               (int)meta.spine.size());
+    }
     drawUI(header, 16, 30, 0xFF00FFFF);
 
     // Content
-    int yStart = 66;
-    int stepY = (int)(20.0f * fontScale);
-    if (stepY < 12)
-      stepY = 12;
+    int stepY = (int)(LAYOUT_LINE_SPACE * fontScale);
+    if (stepY < 10)
+      stepY = 10;
 
     for (int i = 0; i < linesPerPage && (currentLine + i) < totalLines; i++) {
-      drawUI(chapterLines[currentLine + i], 16, yStart + i * stepY, 0xFFFFFFFF);
+      drawUI(chapterLines[currentLine + i], LAYOUT_MARGIN,
+             LAYOUT_START_Y + i * stepY, 0xFFFFFFFF);
     }
 
     // Footer
     char footer[256];
     int p = (currentLine / linesPerPage) + 1;
     int maxP = (totalLines + linesPerPage - 1) / linesPerPage;
-    snprintf(footer, 256,
-             "Page %d/%d | Scale %.1f | " ICON_LEFT ICON_RIGHT " Turn", p,
-             std::max(1, maxP), fontScale);
+    if (isRotated) {
+      snprintf(footer, 256, "P %d/%d | S %.1f | " ICON_LEFT ICON_RIGHT, p,
+               std::max(1, maxP), fontScale);
+    } else {
+      snprintf(footer, 256,
+               "Page %d/%d | Scale %.1f | " ICON_LEFT ICON_RIGHT " Turn", p,
+               std::max(1, maxP), fontScale);
+    }
     drawUI(footer, 16, isRotated ? 464 : 260, 0xFF888888);
 
     if (showStatusOverlay) {
@@ -317,8 +337,13 @@ int main(int argc, char *argv[]) {
       sceRtcGetCurrentClockLocalTime(&ptime);
       int batt = scePowerGetBatteryLifePercent();
       char status[128];
-      snprintf(status, 128, "Time: %02d:%02d | Battery: %d%%", ptime.hour,
-               ptime.minute, batt);
+      if (isRotated) {
+        snprintf(status, 128, "%02d:%02d | %d%%", ptime.hour, ptime.minute,
+                 batt);
+      } else {
+        snprintf(status, 128, "Time: %02d:%02d | Battery: %d%%", ptime.hour,
+                 ptime.minute, batt);
+      }
       drawUI(status, 16, isRotated ? 440 : 235, 0xFF00FF00);
       drawUI(ICON_SELECT " Status | " ICON_TRIANGLE " Menu | " ICON_CIRCLE
                          " Rotate",
@@ -328,7 +353,17 @@ int main(int argc, char *argv[]) {
     if (showChapterMenu) {
       drawUI("=== CHAPTER SELECT ===", 40, 60, 0xFF00FFFF);
       for (int i = 0; i < (int)meta.spine.size() && i < 15; i++) {
-        drawUI(meta.spine[i].id, 50, 85 + i * 18,
+        char displayId[32];
+        if (isRotated) {
+          strncpy(displayId, meta.spine[i].id, 16);
+          displayId[16] = '\0';
+          if (strlen(meta.spine[i].id) > 16)
+            strcat(displayId, "..");
+        } else {
+          strncpy(displayId, meta.spine[i].id, 31);
+          displayId[31] = '\0';
+        }
+        drawUI(displayId, 50, 85 + i * 18,
                (i == currentChapter) ? 0xFF00FF00 : 0xFFFFFFFF);
       }
       drawUI(ICON_CROSS " Select | " ICON_TRIANGLE " Back", 40,
