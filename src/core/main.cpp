@@ -357,25 +357,46 @@ int main(int argc, char *argv[]) {
           int bx = startX + i * spacing;
           int by = 50;
 
+          // Determine dimensions
+          int w = book.thumbW;
+          int h = book.thumbH;
+          // Fallback dimensions if 0
+          if (w == 0 || h == 0) {
+            w = 100;
+            h = 150;
+          }
+
+          // Shadow (Always render shadow)
+          SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
+          SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 100);
+          SDL_Rect shadow = {bx + 4, by + 4, w, h};
+          SDL_RenderFillRect(sdlRenderer, &shadow);
+
+          // Content (Thumbnail or Placeholder)
+          SDL_Rect dst = {bx, by, w, h};
           if (book.thumbnail) {
-            // Shadow
-            SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 100);
-            SDL_Rect shadow = {bx + 4, by + 4, book.thumbW, book.thumbH};
-            SDL_RenderFillRect(sdlRenderer, &shadow);
-
-            SDL_Rect dst = {bx, by, book.thumbW, book.thumbH};
             SDL_RenderCopy(sdlRenderer, book.thumbnail, nullptr, &dst);
+          } else {
+            // Placeholder: Slate/Grey rectangle
+            SDL_SetRenderDrawColor(sdlRenderer, 60, 70, 80, 255);
+            SDL_RenderFillRect(sdlRenderer, &dst);
 
-            if (idx == libSelection) {
-              float pulse = (sinf(frameCount * 0.2f) + 1.0f) * 0.5f;
-              SDL_SetRenderDrawColor(sdlRenderer, 0, 200, 255,
-                                     150 + (int)(pulse * 105));
-              for (int t = 0; t < 3; t++) {
-                SDL_Rect border = {bx - t, by - t, book.thumbW + 2 * t,
-                                   book.thumbH + 2 * t};
-                SDL_RenderDrawRect(sdlRenderer, &border);
-              }
+            // Placeholder text lines effect
+            SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255, 50);
+            for (int k = 0; k < 3; k++) {
+              SDL_Rect line = {bx + 10, by + 30 + (k * 20), w - 20, 10};
+              SDL_RenderFillRect(sdlRenderer, &line);
+            }
+          }
+
+          // Selection Highlight
+          if (idx == libSelection) {
+            float pulse = (sinf(frameCount * 0.2f) + 1.0f) * 0.5f;
+            SDL_SetRenderDrawColor(sdlRenderer, 0, 200, 255,
+                                   150 + (int)(pulse * 105));
+            for (int t = 0; t < 3; t++) {
+              SDL_Rect border = {bx - t, by - t, w + 2 * t, h + 2 * t};
+              SDL_RenderDrawRect(sdlRenderer, &border);
             }
           }
         }
