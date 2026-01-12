@@ -71,9 +71,11 @@ The PSP screen is 480x272. Reading text horizontally is cramped.
 -   **Implementation**: We render text to textures as normal, but we use `SDL_RenderCopyEx` with a 90-degree rotation angle.
 -   **Input Mapping**: When in TATE mode, we swap D-Pad controls so "Up" effectively scrolls "Left" (visually Up), keeping controls intuitive regardless of orientation.
 
-### 4. Text Layout Engine
+### 4. O(N) "Turbo Layout" Engine
 We bypass complex line-breaking algorithms (like ICU) for speed.
--   **Caching**: Rendered text lines are cached in `SDL_Texture`s to prevent re-rendering every frame. The cache is aggressively cleared (`renderer.ClearCache()`) whenever the page changes to free VRAM.
+-   **Caching**: We cache individual word widths per font scale. This allows the layout engine to calculate line breaks arithmetically in O(N) time instead of re-measuring text every frame.
+-   **Smart Position Preservation**: When you change font sizes or rotate the screen, the engine tracks your reading position via "Anchors". It finds the first word currently on screen and ensures that word remains on screen after the layout is recalculated.
+-   **VRAM Management**: Rendered text lines are cached in `SDL_Texture`s to prevent re-rendering. The cache is cleared whenever the page changes or font/screen state is modified.
 
 ### 5. Zero-Overhead Font Switching
 To support CJK languages without destroying performance, we avoid per-character checks during the render loop.

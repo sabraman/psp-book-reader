@@ -43,6 +43,7 @@ static bool HasWideChars(const char *text) {
 
 void TextRenderer::Shutdown() {
   CleanupCache();
+  ClearMetricsCache();
   for (auto &pair : fonts) {
     if (pair.second)
       TTF_CloseFont(pair.second);
@@ -80,6 +81,7 @@ void TextRenderer::SetFontMode(FontMode mode) {
 
 bool TextRenderer::LoadFont(float scale) {
   Shutdown(); // Clean full state
+  ClearMetricsCache();
   if (TTF_Init() == -1)
     return false;
 

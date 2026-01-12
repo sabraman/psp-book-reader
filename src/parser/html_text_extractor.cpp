@@ -1,4 +1,5 @@
 #include "html_text_extractor.h"
+#include "debug_logger.h"
 #include <cctype>
 #include <cstring>
 #include <strings.h>
@@ -120,5 +121,9 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
   }
 
   commitWord();
+  if (wordCount < maxWords) {
+    words[wordCount] = nullptr;
+  }
+  DebugLogger::Log("Extracted %d words", wordCount);
   return wordCount;
 }
