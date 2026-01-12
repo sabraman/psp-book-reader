@@ -89,7 +89,22 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
     } else if (c == '>') {
       inTag = false;
     } else if (!inTag && !inScript && !inStyle) {
-      if (IsWhitespace(c)) {
+      unsigned char uc = (unsigned char)c;
+      // Check for CJK start byte (roughly 0xE0 - 0xEF for common CJK)
+      if (uc >= 0xE0 && uc <= 0xEF) {
+        // Commit pending word first
+        commitWord();
+
+        // Capture the 3-byte char as a standalone "word"
+        if (html[i + 1] && html[i + 2]) {
+          currentWord[0] = c;
+          currentWord[1] = html[i + 1];
+          currentWord[2] = html[i + 2];
+          currentWordLen = 3;
+          commitWord(); // Commit this character immediately
+          i += 2;       // Skip next 2 bytes (loop adds 1 more)
+        }
+      } else if (IsWhitespace(c)) {
         commitWord();
       } else if (currentWordLen < 255) {
         currentWord[currentWordLen++] = c;

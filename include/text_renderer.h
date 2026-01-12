@@ -44,6 +44,7 @@ public:
 private:
   SDL_Renderer *renderer;
   std::unordered_map<TextStyle, TTF_Font *> fonts;
+  std::unordered_map<TextStyle, TTF_Font *> fallbackFonts;
   float fontScale;
 
   struct CachedTexture {

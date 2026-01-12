@@ -16,14 +16,42 @@ bool TextRenderer::Initialize(SDL_Renderer *sdlRenderer) {
   return true;
 }
 
+// Helper to check for CJK/Wide characters
+static bool HasWideChars(const char *text) {
+  if (!text)
+    return false;
+  // Simple check: if any byte is > 127, it's non-ASCII.
+  // Generally, CJK are 3-byte UTF-8 sequences starting with 0xE...
+  // Cyrillic is 2-byte starting with 0xD...
+  // Inter covers standard Latin + Cyrillic. Droid covers CJK.
+  // We want to fallback MAINLY for CJK.
+  // Unicode blocks:
+  // CJK Unified Ideographs: 4E00-9FFF (E4 B8 80 - E9 BF BF)
+  // Kana/Hangul etc also high up.
+  // Quick heuristic: If we find a 3-byte sequence (0xE0-0xEF), assume CJK
+  // and use fallback.
+  size_t len = strlen(text);
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)text[i];
+    if (c >= 0xE0 && c <= 0xEF) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void TextRenderer::Shutdown() {
   CleanupCache();
   for (auto &pair : fonts) {
-    if (pair.second) {
+    if (pair.second)
       TTF_CloseFont(pair.second);
-    }
+  }
+  for (auto &pair : fallbackFonts) {
+    if (pair.second)
+      TTF_CloseFont(pair.second);
   }
   fonts.clear();
+  fallbackFonts.clear();
   TTF_Quit();
 }
 
@@ -41,26 +69,31 @@ void TextRenderer::ClearCache() { CleanupCache(); }
 void TextRenderer::ClearMetricsCache() { metricsCache.clear(); }
 
 bool TextRenderer::LoadFont(float scale) {
-  for (auto &pair : fonts) {
-    if (pair.second) {
-      TTF_CloseFont(pair.second);
-    }
-  }
-  fonts.clear();
-  CleanupCache();
-  ClearMetricsCache();
+  Shutdown(); // Clean full state
+  if (TTF_Init() == -1)
+    return false;
 
   fontScale = scale;
-  const char *fontPath = "fonts/Inter-Regular.ttf";
+  const char *primaryPath = "fonts/Inter-Regular.ttf";
+  const char *fallbackPath = "fonts/DroidSansFallback.ttf";
 
   auto loadOne = [&](TextStyle style, int baseSize) {
     int size = (int)(baseSize * fontScale);
     if (size < 8)
       size = 8;
-    fonts[style] = TTF_OpenFont(fontPath, size);
+
+    // Load Primary
+    fonts[style] = TTF_OpenFont(primaryPath, size);
     if (!fonts[style]) {
-      DebugLogger::Log("TTF_OpenFont failed for style %d: %s", (int)style,
+      DebugLogger::Log("Failed loading primary font %d: %s", (int)style,
                        TTF_GetError());
+    }
+
+    // Load Fallback
+    fallbackFonts[style] = TTF_OpenFont(fallbackPath, size);
+    if (!fallbackFonts[style]) {
+      // If fallback fails, just log it, don't crash, we just won't have CJK
+      DebugLogger::Log("Failed loading fallback font: %s", TTF_GetError());
     }
   };
 
@@ -75,15 +108,23 @@ bool TextRenderer::LoadFont(float scale) {
 }
 
 std::string TextRenderer::GetCacheKey(const char *text, TextStyle style) {
-  char buf[16];
-  snprintf(buf, 16, "%d_", (int)style);
+  char buf[32];
+  snprintf(buf, 32, "%d_", (int)style);
   return std::string(buf) + text;
 }
 
 void TextRenderer::RenderText(const char *text, int x, int y, uint32_t color,
                               TextStyle style, float angle) {
+  if (!renderer || !text || strlen(text) == 0)
+    return;
+
+  // Smart Font Selection
   TTF_Font *font = fonts[style];
-  if (!font || !renderer || !text || strlen(text) == 0)
+  if (HasWideChars(text) && fallbackFonts[style]) {
+    font = fallbackFonts[style];
+  }
+
+  if (!font)
     return;
 
   std::string key = GetCacheKey(text, style);
@@ -134,8 +175,6 @@ void TextRenderer::RenderTextCentered(const char *text, int y, uint32_t color,
   int width = MeasureTextWidth(text, style);
 
   if (angle != 0.0f) {
-    // For rotated centering, we center relative to the 'vertical' height (272)
-    // On PSP, screen dimensions are fixed.
     int tx = (272 - width) / 2;
     RenderText(text, 480 - y, tx, color, style, angle);
   } else {
@@ -154,7 +193,12 @@ int TextRenderer::MeasureTextWidth(const char *text, TextStyle style) {
     return it->second;
   }
 
+  // Smart Selection
   TTF_Font *font = fonts[style];
+  if (HasWideChars(text) && fallbackFonts[style]) {
+    font = fallbackFonts[style];
+  }
+
   if (!font)
     return 0;
 
