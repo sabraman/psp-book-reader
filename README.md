@@ -12,6 +12,7 @@ A modern, feature-rich EPUB reader for the Sony PlayStation Portable (PSP), buil
 -   **Fast Navigation**: Smart chapter menu with marquee scrolling for long titles.
 -   **Performance**: Optimized C++ engine using SDL2 for hardware acceleration on the PSP.
 -   **EPUB Support**: Native parsing of EPUB containers, spines, and extracting text from HTML chapters.
+-   **Wide Character Support**: Hybrid font system (Inter + Droid Sans Fallback) for displaying Chinese, Japanese, Korean, and Cyrillic text.
 
 ## Controls
 
