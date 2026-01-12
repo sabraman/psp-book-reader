@@ -16,6 +16,7 @@ struct ChapterInfo {
 struct EpubMetadata {
   char title[128];
   char author[128];
+  char language[16];
   char coverHref[128];
   std::vector<ChapterInfo> spine;
 };

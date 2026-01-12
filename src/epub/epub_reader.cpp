@@ -11,6 +11,7 @@ EpubReader::EpubReader() : zipArchive(nullptr) {
   // Clear metadata
   metadata.title[0] = '\0';
   metadata.author[0] = '\0';
+  metadata.language[0] = '\0';
   metadata.coverHref[0] = '\0';
   metadata.spine.clear();
 }
@@ -138,6 +139,8 @@ bool EpubReader::ParseContentOpf(const uint8_t *data,
           127);
   strncpy(metadata.author, metadataNode.child("dc:creator").text().as_string(),
           127);
+  strncpy(metadata.language,
+          metadataNode.child("dc:language").text().as_string(), 15);
 
   // EPUB 2 cover detection
   std::string coverId = "";

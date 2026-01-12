@@ -3,7 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
-TextRenderer::TextRenderer() : renderer(nullptr), fontScale(1.0f) {}
+TextRenderer::TextRenderer()
+    : renderer(nullptr), fontScale(1.0f), currentMode(FontMode::SMART) {}
 
 TextRenderer::~TextRenderer() { Shutdown(); }
 
@@ -68,6 +69,15 @@ void TextRenderer::ClearCache() { CleanupCache(); }
 
 void TextRenderer::ClearMetricsCache() { metricsCache.clear(); }
 
+void TextRenderer::SetFontMode(FontMode mode) {
+  if (currentMode != mode) {
+    currentMode = mode;
+    // Clearing cache is safer when switching modes to avoid mixing assets
+    ClearCache();
+    ClearMetricsCache();
+  }
+}
+
 bool TextRenderer::LoadFont(float scale) {
   Shutdown(); // Clean full state
   if (TTF_Init() == -1)
@@ -109,7 +119,9 @@ bool TextRenderer::LoadFont(float scale) {
 
 std::string TextRenderer::GetCacheKey(const char *text, TextStyle style) {
   char buf[32];
-  snprintf(buf, 32, "%d_", (int)style);
+  // Cache key includes mode to prevent collisions if we switch modes without
+  // clearing
+  snprintf(buf, 32, "%d_%d_", (int)style, (int)currentMode);
   return std::string(buf) + text;
 }
 
@@ -118,10 +130,20 @@ void TextRenderer::RenderText(const char *text, int x, int y, uint32_t color,
   if (!renderer || !text || strlen(text) == 0)
     return;
 
-  // Smart Font Selection
-  TTF_Font *font = fonts[style];
-  if (HasWideChars(text) && fallbackFonts[style]) {
-    font = fallbackFonts[style];
+  // Font Selection Logic
+  TTF_Font *font = nullptr;
+
+  if (currentMode == FontMode::INTER_ONLY) {
+    font = fonts[style];
+  } else if (currentMode == FontMode::FALLBACK_ONLY) {
+    // If fallback fails, try primary
+    font = fallbackFonts[style] ? fallbackFonts[style] : fonts[style];
+  } else {
+    // Smart Mode
+    font = fonts[style];
+    if (HasWideChars(text) && fallbackFonts[style]) {
+      font = fallbackFonts[style];
+    }
   }
 
   if (!font)
@@ -193,10 +215,16 @@ int TextRenderer::MeasureTextWidth(const char *text, TextStyle style) {
     return it->second;
   }
 
-  // Smart Selection
-  TTF_Font *font = fonts[style];
-  if (HasWideChars(text) && fallbackFonts[style]) {
-    font = fallbackFonts[style];
+  TTF_Font *font = nullptr;
+  if (currentMode == FontMode::INTER_ONLY) {
+    font = fonts[style];
+  } else if (currentMode == FontMode::FALLBACK_ONLY) {
+    font = fallbackFonts[style] ? fallbackFonts[style] : fonts[style];
+  } else {
+    font = fonts[style];
+    if (HasWideChars(text) && fallbackFonts[style]) {
+      font = fallbackFonts[style];
+    }
   }
 
   if (!font)

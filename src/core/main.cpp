@@ -310,6 +310,20 @@ int main(int argc, char *argv[]) {
             layoutState.complete = true;
             layoutState.chapterIndex = -1;
             renderer.LoadFont(readerFontScale);
+
+            // Select Font Mode based on Language
+            const char *lang = reader.GetMetadata().language;
+            if (lang &&
+                (strncmp(lang, "zh", 2) == 0 || strncmp(lang, "ja", 2) == 0 ||
+                 strncmp(lang, "ko", 2) == 0)) {
+              renderer.SetFontMode(FontMode::FALLBACK_ONLY);
+              DebugLogger::Log("Language: %s -> Mode: FALLBACK_ONLY", lang);
+            } else {
+              renderer.SetFontMode(FontMode::INTER_ONLY);
+              DebugLogger::Log("Language: %s -> Mode: INTER_ONLY",
+                               lang ? lang : "none");
+            }
+
             if (!renderer.IsValid()) {
               DebugLogger::Log("ERROR: Fonts failed to load!");
             }
@@ -515,6 +529,7 @@ int main(int argc, char *argv[]) {
         }
         if (input.SelectPressed()) {
           currentState = STATE_LIBRARY;
+          renderer.SetFontMode(FontMode::SMART);
           renderer.LoadFont(1.0f);
           renderer.ClearCache();
         }

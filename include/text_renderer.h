@@ -16,6 +16,8 @@ enum class TextStyle {
   SMALL  // For footer/status
 };
 
+enum class FontMode { SMART, INTER_ONLY, FALLBACK_ONLY };
+
 class TextRenderer {
 public:
   TextRenderer();
@@ -25,6 +27,8 @@ public:
   void Shutdown();
 
   bool LoadFont(float scale);
+
+  void SetFontMode(FontMode mode);
 
   void RenderText(const char *text, int x, int y, uint32_t color,
                   TextStyle style = TextStyle::NORMAL, float angle = 0.0f);
@@ -46,6 +50,7 @@ private:
   std::unordered_map<TextStyle, TTF_Font *> fonts;
   std::unordered_map<TextStyle, TTF_Font *> fallbackFonts;
   float fontScale;
+  FontMode currentMode;
 
   struct CachedTexture {
     SDL_Texture *texture;
