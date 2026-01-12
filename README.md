@@ -11,7 +11,7 @@ A modern, feature-rich EPUB reader for the Sony PlayStation Portable (PSP), buil
 -   **Fancy Typography**: Uses high-quality fonts rendered with `SDL2_ttf` for crisp text.
 -   **Fast Navigation**: Smart chapter menu with minimalist page indicators.
 -   **Library Snapshot Caching**: Near-instant library scanning by caching book metadata.
--   **Deeply Optimized**: Audit-driven performance (Phases 1-4) featuring O(1) LRU caches, keyed rendering, and throttled layout.
+-   **Deeply Optimized**: High-performance C++ engine featuring O(1) LRU caches, keyed rendering, and throttled background layout for a butter-smooth reading experience.
 -   **System Status**: Real-time clock and battery percentage available in both Library and Reader views.
 -   **Wide Character Support**: Automatically switches to **Droid Sans Fallback** for CJK books while keeping **Inter** for Latin/Cyrillic.
 
