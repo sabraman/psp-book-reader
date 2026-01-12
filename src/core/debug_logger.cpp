@@ -20,7 +20,6 @@ void DebugLogger::Log(const char *format, ...) {
   vfprintf(logFile, format, args);
   va_end(args);
   fprintf(logFile, "\n");
-  fflush(logFile); // Always flush immediately
 }
 
 void DebugLogger::Close() {

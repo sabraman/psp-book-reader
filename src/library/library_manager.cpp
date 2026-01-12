@@ -65,12 +65,12 @@ bool LibraryManager::ScanDirectory(const std::string &path) {
         book.author = cacheMap[fullPath].second;
         books.push_back(book);
       } else {
-        EpubReader reader;
-        if (reader.Open(fullPath.c_str())) {
+        static EpubReader sharedReader;
+        if (sharedReader.Open(fullPath.c_str())) {
           BookEntry book;
           book.filename = fullPath;
-          book.title = reader.GetMetadata().title;
-          book.author = reader.GetMetadata().author;
+          book.title = sharedReader.GetMetadata().title;
+          book.author = sharedReader.GetMetadata().author;
           books.push_back(book);
 
           cacheMap[fullPath] = {book.title, book.author};

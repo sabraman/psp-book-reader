@@ -6,5 +6,13 @@
 // SDL2-based cover rendering utility
 class CoverRenderer {
 public:
-  static bool ShowCover(SDL_Renderer *renderer, EpubReader &reader);
+  CoverRenderer();
+  ~CoverRenderer();
+
+  bool ShowCover(SDL_Renderer *renderer, EpubReader &reader, int timeoutMs = 0);
+  void ClearCache();
+
+private:
+  SDL_Texture *cachedTexture;
+  std::string cachedHref;
 };

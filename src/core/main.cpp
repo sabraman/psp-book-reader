@@ -36,7 +36,8 @@
 struct LineInfo {
   char text[MAX_LINE_LEN];
   TextStyle style;
-  int startWordIdx; // Used for anchor tracking during reflow
+  int startWordIdx;  // Used for anchor tracking during reflow
+  uint64_t cacheKey; // Pre-calculated render key
 };
 
 static LineInfo chapterLines[MAX_CHAPTER_LINES];
@@ -45,7 +46,6 @@ static int currentLine = 0;
 static float readerFontScale = 1.0f;
 static bool isRotated = false;
 static bool showChapterMenu = false;
-static bool showStatusOverlay = false;
 static int linesPerPage = 10;
 static int menuSelection = 0;
 static int menuScroll = 0;
@@ -63,6 +63,8 @@ struct LayoutState {
 
 static std::vector<int> pageAnchors; // wordIndex for start of each page
 static int currentPageIdx = 0;
+static bool showStatusOverlay = false;
+static CoverRenderer coverRenderer;
 
 static char *words[MAX_WORDS];
 static int wordLens[MAX_WORDS];
@@ -88,6 +90,11 @@ const char *findStringInsensitive(const char *haystack, const char *needle) {
   }
   return NULL;
 }
+
+struct MetadataCheck {
+  bool isRedundant[15];
+  int checkedCount;
+} metadataCheck = {{false}, 0};
 
 bool isRedundantMetadata(const char *text, const EpubMetadata &meta) {
   if (!text || text[0] == '\0')
@@ -134,7 +141,11 @@ void resetLayout(int chapterIndex, EpubReader &reader,
   currentLine = 0;
   currentPageIdx = 0;
   pageAnchors.clear();
+  pageAnchors.reserve(512); // Pre-allocate to prevent heap churn
   pageAnchors.push_back(0); // Page 1 starts at word 0
+
+  metadataCheck.checkedCount = 0;
+  memset(metadataCheck.isRedundant, 0, sizeof(metadataCheck.isRedundant));
 
   DebugLogger::Log("Layout Reset for Ch %d", chapterIndex);
 }
@@ -252,12 +263,20 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
       }
       linePtr[lineLen] = '\0';
 
-      if (totalLines < 15 &&
-          isRedundantMetadata(chapterLines[totalLines].text, meta)) {
+      bool redundant = false;
+      if (totalLines < 15) {
+        redundant = isRedundantMetadata(chapterLines[totalLines].text, meta);
+        metadataCheck.isRedundant[totalLines] = redundant;
+        metadataCheck.checkedCount = totalLines + 1;
+      }
+
+      if (redundant) {
         // Skip metadata noise
       } else {
         chapterLines[totalLines].style = currentLineStyle;
         chapterLines[totalLines].startWordIdx = lineStartWordIdx;
+        chapterLines[totalLines].cacheKey =
+            renderer.GetCacheKey(linePtr, currentLineStyle);
 
         // Position Recovery Logic
         if (layoutState.targetWordIdx >= 0 &&
@@ -305,8 +324,8 @@ int main(int argc, char *argv[]) {
   SDL_Window *window =
       SDL_CreateWindow("PSP-BookReader", SDL_WINDOWPOS_UNDEFINED,
                        SDL_WINDOWPOS_UNDEFINED, 480, 272, 0);
-  SDL_Renderer *sdlRenderer =
-      SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+  SDL_Renderer *sdlRenderer = SDL_CreateRenderer(
+      window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
   SDL_Event event;
 
@@ -336,8 +355,17 @@ int main(int argc, char *argv[]) {
         running = 0;
       input.ProcessEvent(event);
     }
-    if (input.Exit())
-      break;
+    if (input.Exit()) {
+      if (currentState == STATE_READER) {
+        currentState = STATE_LIBRARY;
+        renderer.SetFontMode(FontMode::SMART);
+        renderer.LoadFont(1.0f);
+        spaceWidthsDirty = true;
+        renderer.ClearCache();
+      } else {
+        break; // Exit app from library
+      }
+    }
 
     if (currentState == STATE_LIBRARY) {
       if (isScanning) {
@@ -392,7 +420,8 @@ int main(int argc, char *argv[]) {
             }
             // DebugLogger::Log("Fonts loaded. Clearing cache...");
             renderer.ClearCache();
-            // DebugLogger::Log("Ready to render");
+            // Show cover for 2 seconds
+            coverRenderer.ShowCover(sdlRenderer, reader, 2000);
           } else {
             // DebugLogger::Log("Failed to open book");
           }
@@ -413,7 +442,14 @@ int main(int argc, char *argv[]) {
       SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255, 40);
       SDL_RenderDrawLine(sdlRenderer, 20, 205, 460, 205);
 
-      renderer.RenderText("PICK A BOOK", 40, 20, 0xFFFFFFFF, TextStyle::SMALL);
+      // Library Status Header
+      ScePspDateTime pspTime;
+      sceRtcGetCurrentClockLocalTime(&pspTime);
+      int battery = scePowerGetBatteryLifePercent();
+      char statusBuf[64];
+      snprintf(statusBuf, sizeof(statusBuf), "%02d:%02d  |  %d%%", pspTime.hour,
+               pspTime.minute, battery);
+      renderer.RenderText(statusBuf, 40, 20, 0xFF888888, TextStyle::SMALL);
 
       char countBuf[32];
       snprintf(countBuf, 32, "%d BOOKS", (int)books.size());
@@ -520,7 +556,8 @@ int main(int argc, char *argv[]) {
       const EpubMetadata &meta = reader.GetMetadata();
       // Background layout processing
       if (!layoutState.complete) {
-        processLayout(reader, renderer, 1000); // 1000 words per frame
+        processLayout(reader, renderer,
+                      500); // Throttled to 500 words for better frame timing
       }
 
       bool layoutNeedsReset = false;
@@ -563,7 +600,6 @@ int main(int argc, char *argv[]) {
             if (currentLine + linesPerPage < totalLines) {
               currentLine += linesPerPage;
               currentPageIdx++;
-              renderer.ClearCache();
             } else {
               // Speed up layout if user is waiting
               processLayout(reader, renderer, 1000);
@@ -572,7 +608,6 @@ int main(int argc, char *argv[]) {
             currentChapter++;
             layoutNeedsReset = true;
             currentLine = 0;
-            renderer.ClearCache();
           }
         }
         if (input.PrevPage()) {
@@ -580,23 +615,19 @@ int main(int argc, char *argv[]) {
             currentLine -= linesPerPage;
             if (currentPageIdx > 0)
               currentPageIdx--;
-            renderer.ClearCache();
           } else if (currentChapter > 0) {
             currentChapter--;
             resetLayout(currentChapter, reader, htmlExtractor);
             processLayout(reader, renderer, 10000);
             if (currentChapter == 0 && totalLines == 0) {
               currentChapter = -1;
-              renderer.ClearCache();
             } else {
               currentLine = ((totalLines - 1) / linesPerPage) * linesPerPage;
               if (currentLine < 0)
                 currentLine = 0;
-              renderer.ClearCache();
             }
           } else if (currentChapter == 0) {
             currentChapter = -1;
-            renderer.ClearCache();
           }
         }
         if (input.CirclePressed()) {
@@ -605,11 +636,7 @@ int main(int argc, char *argv[]) {
           renderer.ClearCache();
         }
         if (input.SelectPressed()) {
-          currentState = STATE_LIBRARY;
-          renderer.SetFontMode(FontMode::SMART);
-          renderer.LoadFont(1.0f);
-          spaceWidthsDirty = true;
-          renderer.ClearCache();
+          showStatusOverlay = !showStatusOverlay;
         }
         if (input.TrianglePressed()) {
           showChapterMenu = true;
@@ -638,14 +665,6 @@ int main(int argc, char *argv[]) {
       // --- READER RENDER ---
       SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
       SDL_RenderClear(sdlRenderer);
-
-      auto drawUI = [&](const char *text, int tx, int ty, uint32_t color,
-                        TextStyle style = TextStyle::NORMAL) {
-        if (isRotated)
-          renderer.RenderText(text, SCREEN_WIDTH - ty, tx, color, style, 90.0f);
-        else
-          renderer.RenderText(text, tx, ty, color, style, 0.0f);
-      };
 
       if (currentChapter == -1) {
         if (isRotated) {
@@ -698,27 +717,56 @@ int main(int argc, char *argv[]) {
         int stepY = (int)(baseHeight * 1.35f);
         for (int i = 0; i < linesPerPage && (currentLine + i) < totalLines;
              i++) {
-          TextStyle s = chapterLines[currentLine + i].style;
-          const char *txt = chapterLines[currentLine + i].text;
+          const LineInfo &li = chapterLines[currentLine + i];
+          TextStyle s = li.style;
+          const char *txt = li.text;
+          uint64_t key = li.cacheKey;
+
           if (!txt || txt[0] == '\0')
             continue;
           if (s == TextStyle::NORMAL) {
             if (isRotated)
-              renderer.RenderText(txt,
-                                  SCREEN_WIDTH - (LAYOUT_START_Y + i * stepY),
-                                  LAYOUT_MARGIN, 0xFFFFFFFF, s, 90.0f);
+              renderer.RenderTextWithKey(
+                  txt, key, SCREEN_WIDTH - (LAYOUT_START_Y + i * stepY),
+                  LAYOUT_MARGIN, 0xFFFFFFFF, s, 90.0f);
             else
-              renderer.RenderText(txt, LAYOUT_MARGIN,
-                                  LAYOUT_START_Y + i * stepY, 0xFFFFFFFF, s,
-                                  0.0f);
+              renderer.RenderTextWithKey(txt, key, LAYOUT_MARGIN,
+                                         LAYOUT_START_Y + i * stepY, 0xFFFFFFFF,
+                                         s, 0.0f);
           } else {
             if (isRotated)
-              renderer.RenderTextCentered(txt, (LAYOUT_START_Y + i * stepY),
-                                          0xFFFFFFFF, s, 90.0f);
+              renderer.RenderTextCenteredWithKey(
+                  txt, key, (LAYOUT_START_Y + i * stepY), 0xFFFFFFFF, s, 90.0f);
             else
-              renderer.RenderTextCentered(txt, LAYOUT_START_Y + i * stepY,
-                                          0xFFFFFFFF, s, 0.0f);
+              renderer.RenderTextCenteredWithKey(
+                  txt, key, LAYOUT_START_Y + i * stepY, 0xFFFFFFFF, s, 0.0f);
           }
+        }
+      }
+
+      // Status Overlay (SELECT)
+      if (showStatusOverlay) {
+        ScePspDateTime pspTime;
+        sceRtcGetCurrentClockLocalTime(&pspTime);
+        int battery = scePowerGetBatteryLifePercent();
+
+        char statusBuf[64];
+        snprintf(statusBuf, sizeof(statusBuf), "%02d:%02d  |  %d%%",
+                 pspTime.hour, pspTime.minute, battery);
+
+        SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 180);
+
+        if (isRotated) {
+          SDL_Rect bg = {445, 0, 35, 272};
+          SDL_RenderFillRect(sdlRenderer, &bg);
+          renderer.RenderText(statusBuf, 448, 10, 0xFFFFFFFF, TextStyle::SMALL,
+                              90.0f);
+        } else {
+          SDL_Rect bg = {0, 0, 480, 25};
+          SDL_RenderFillRect(sdlRenderer, &bg);
+          renderer.RenderText(statusBuf, 10, 5, 0xFFFFFFFF, TextStyle::SMALL,
+                              0.0f);
         }
       }
 
@@ -736,39 +784,28 @@ int main(int argc, char *argv[]) {
       }
 
       if (showChapterMenu) {
+        const EpubMetadata &meta = reader.GetMetadata();
         SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 230);
         SDL_Rect overlay = {0, 0, 480, 272};
         SDL_RenderFillRect(sdlRenderer, &overlay);
+
         int menuX = isRotated ? 10 : 40;
-        int menuY = isRotated ? 40 : 40;
+        int menuY = 40;
         int menuWidth = isRotated ? 250 : 400;
         int visibleItems = isRotated ? 22 : 12;
+
         for (int i = 0;
              i < visibleItems && (menuScroll + i) < (int)meta.spine.size();
              i++) {
           int idx = menuScroll + i;
-          std::string title = meta.spine[idx].title;
+          const char *title = meta.spine[idx].title;
           uint32_t color = (idx == menuSelection) ? 0xFFFFFFFF : 0xFF888888;
-          // Loop Body
+
           if (idx == menuSelection) {
-            float pulse = (sinf(frameCount * 0.15f) + 1.0f) * 0.5f;
-            SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255,
-                                   20 + (int)(pulse * 30));
+            SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255, 40);
             if (isRotated) {
-              // Visual Rec for selection
-              // X (visual) = menuX
-              // Y (visual) = menuY + i*18
-              // W (visual) = menuWidth
-              // H (visual) = 18
-
-              // Rotated Rect:
-              // Physical X = 480 - (menuY + i*18) - 18 (height becomes width)
-              // => 480 - visualY - 18 Physical Y = menuX (indent) Physical W =
-              // 18 (height) Physical H = menuWidth (width)
-
-              int visualY = menuY + i * 18;
-              SDL_Rect selRect = {480 - visualY - 18 - 4, menuX - 5, 24,
+              SDL_Rect selRect = {480 - (menuY + i * 18) - 22, menuX - 5, 24,
                                   menuWidth + 10};
               SDL_RenderFillRect(sdlRenderer, &selRect);
             } else {
@@ -777,87 +814,20 @@ int main(int argc, char *argv[]) {
               SDL_RenderFillRect(sdlRenderer, &selRect);
             }
           }
+
           if (isRotated) {
-            int visualItemY = menuY + i * 18;
-            // For text scrolling on selected item
-            int textX = visualItemY;
-            int textY = menuX;
-
-            if (idx == menuSelection) {
-              // Measure and scroll
-              int w =
-                  renderer.MeasureTextWidth(title.c_str(), TextStyle::NORMAL);
-              int maxVisible = menuWidth;
-              if (w > maxVisible) {
-                int scrollSpeed = 2; // px per frame
-                int scrollPeriod =
-                    w + 100; // total scroll distance including pause
-                int offset =
-                    (frameCount * 2) %
-                    scrollPeriod; // Fixed scroll, or use shift logic below
-
-                int shift = (frameCount % (w + 50));
-                int effectiveX = menuX - shift;
-
-                SDL_Rect pClip;
-                pClip.x = 480 - (menuY + visibleItems * 18);
-                pClip.y = menuX;
-                pClip.w =
-                    visibleItems * 18; // Logic might be rough but safe enough
-                pClip.h = menuWidth;
-
-                SDL_RenderSetClipRect(sdlRenderer, &pClip);
-
-                renderer.RenderText(title.c_str(), 480 - visualItemY,
-                                    menuX - shift, color, TextStyle::NORMAL,
-                                    90.0f);
-
-                if (shift > 0) {
-                  renderer.RenderText(title.c_str(), 480 - visualItemY,
-                                      menuX - shift + w + 50, color,
-                                      TextStyle::NORMAL, 90.0f);
-                }
-
-                SDL_RenderSetClipRect(sdlRenderer, NULL);
-              } else {
-                renderer.RenderText(title.c_str(), 480 - visualItemY, menuX,
-                                    color, TextStyle::NORMAL, 90.0f);
-              }
-            } else {
-              renderer.RenderText(title.c_str(), 480 - visualItemY, menuX,
-                                  color, TextStyle::NORMAL, 90.0f);
-            }
+            int visualY = menuY + i * 18;
+            renderer.RenderText(title, 480 - visualY, menuX, color,
+                                TextStyle::NORMAL, 90.0f);
           } else {
-            // Landscape Mode
-            if (idx == menuSelection) {
-              int w =
-                  renderer.MeasureTextWidth(title.c_str(), TextStyle::NORMAL);
-              int maxVisible = menuWidth;
-              if (w > maxVisible) {
-                int shift = (frameCount % (w + 50));
-                SDL_Rect clip = {menuX, menuY + i * 18, menuWidth, 18};
-                SDL_RenderSetClipRect(sdlRenderer, &clip);
-                renderer.RenderText(title.c_str(), menuX - shift,
-                                    menuY + i * 18, color);
-                if (shift > 0) {
-                  renderer.RenderText(title.c_str(), menuX - shift + w + 50,
-                                      menuY + i * 18, color);
-                }
-                SDL_RenderSetClipRect(sdlRenderer, NULL);
-              } else {
-                renderer.RenderText(title.c_str(), menuX, menuY + i * 18,
-                                    color);
-              }
-            } else {
-              renderer.RenderText(title.c_str(), menuX, menuY + i * 18, color);
-            }
+            renderer.RenderText(title, menuX, menuY + i * 18, color,
+                                TextStyle::NORMAL, 0.0f);
           }
         }
       }
     }
 
     SDL_RenderPresent(sdlRenderer);
-    // Sync to VBlank for smooth 60fps on real hardware
     sceDisplayWaitVblankStart();
     SDL_Delay(1);
   }

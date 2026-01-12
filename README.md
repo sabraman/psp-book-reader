@@ -6,14 +6,14 @@ A modern, feature-rich EPUB reader for the Sony PlayStation Portable (PSP), buil
 
 ## Features
 
--   **Modern UI**: Glassmorphic library view with cover art support.
+-   **Modern UI**: Glassmorphic library view with cover art support and system status.
 -   **Rotated "TATE" Mode**: Squeeze the most out of your screen by holding the PSP vertically (9:16 aspect ratio).
 -   **Fancy Typography**: Uses high-quality fonts rendered with `SDL2_ttf` for crisp text.
--   **Fast Navigation**: Smart chapter menu with marquee scrolling for long titles.
--   **Library Metadata Caching**: Near-instant library scanning by caching book metadata after the first scan.
--   **Performance**: Optimized C++ engine using SDL2 for hardware acceleration and PSP-specific power tuning.
--   **EPUB Support**: Native parsing of EPUB containers, spines, and extracting text from HTML chapters.
--   **Wide Character Support**: Automatically switches to **Droid Sans Fallback** for CJK books while keeping **Inter** for Latin/Cyrillic, ensuring zero performance cost.
+-   **Fast Navigation**: Smart chapter menu with minimalist page indicators.
+-   **Library Snapshot Caching**: Near-instant library scanning by caching book metadata.
+-   **Deeply Optimized**: Audit-driven performance (Phases 1-4) featuring O(1) LRU caches, keyed rendering, and throttled layout.
+-   **System Status**: Real-time clock and battery percentage available in both Library and Reader views.
+-   **Wide Character Support**: Automatically switches to **Droid Sans Fallback** for CJK books while keeping **Inter** for Latin/Cyrillic.
 
 ## Controls
 
@@ -22,7 +22,8 @@ A modern, feature-rich EPUB reader for the Sony PlayStation Portable (PSP), buil
 | **Cross (X)** | Select Book / Open Menu Item |
 | **Circle (O)** | Rotate Screen (TATE Mode) |
 | **Triangle** | Open/Close Chapter Menu |
-| **Select** | Return to Library |
+| **Start** | Return to Library (from Reader) / Exit App (from Library) |
+| **Select** | Toggle Status Overlay (Time & Battery) |
 | **L / R Triggers** | Fast Scroll (Library) / Previous/Next Page (Reader) |
 | **D-Pad Up/Down** | Font Size (Reader) / Navigate Menu |
 | **D-Pad Left/Right** | Navigate Library |
@@ -76,7 +77,8 @@ The PSP screen is 480x272. Reading text horizontally is cramped.
 We bypass complex line-breaking algorithms for speed.
 -   **Caching**: We cache individual word widths and word lengths per font scale. This allows the layout engine to calculate line breaks arithmetically in O(N) time instead of re-measuring text or re-scanning strings.
 -   **Smart Position Preservation**: When you change font sizes or rotate the screen, the engine tracks your reading position via "Anchors". It finds the first word currently on screen and ensures that word remains on screen after the layout is recalculated.
--   **LRU Texture Cache**: Rendered text lines are stored in a size-limited Least Recently Used (LRU) cache. Numerical hashing (FNV-1a) is used for near-instant texture lookups, significantly reducing heap overhead.
+-   **LRU Texture Cache**: Rendered text lines are stored in an O(1) Least Recently Used (LRU) cache.
+-   **Keyed Rendering**: Text hashes (FNV-1a) are pre-calculated during layout and stored in `LineInfo`, allowing the render loop to skip expensive string hashing on every frame.
 -   **Dynamic Line Spacing**: Spacing is calculated based on font metrics (1.35x font height) rather than hardcoded constants, ensuring perfect readability at any zoom level.
 
 ### 5. Advanced System Tuning

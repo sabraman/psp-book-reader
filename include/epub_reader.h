@@ -39,5 +39,6 @@ private:
   EpubMetadata metadata;
 
   bool ReadContainerXml(char *outPath);
-  bool ParseContentOpf(const uint8_t *data, const std::string &rootDir);
+  bool ParseContentOpf(const uint8_t *data, size_t size,
+                       const std::string &rootDir);
 };

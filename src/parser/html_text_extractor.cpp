@@ -67,10 +67,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       if (*t == '/') {
         // Closing tags
         t++;
-        if (strncasecmp(t, "h1", 2) == 0 || strncasecmp(t, "h2", 2) == 0 ||
-            strncasecmp(t, "h3", 2) == 0) {
-          currentStyle = TextStyle::NORMAL;
-          pushNewline();
+        if (t[0] == 'h' || t[0] == 'H') {
+          if (t[1] >= '1' && t[1] <= '3') {
+            currentStyle = TextStyle::NORMAL;
+            pushNewline();
+          }
         } else if (strncasecmp(t, "script", 6) == 0) {
           inScript = false;
         } else if (strncasecmp(t, "style", 5) == 0) {
@@ -78,18 +79,21 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
         }
       } else {
         // Opening tags
-        if (strncasecmp(t, "h1", 2) == 0) {
-          currentStyle = TextStyle::H1;
-          pushNewline();
-        } else if (strncasecmp(t, "h2", 2) == 0) {
-          currentStyle = TextStyle::H2;
-          pushNewline();
-        } else if (strncasecmp(t, "h3", 2) == 0) {
-          currentStyle = TextStyle::H3;
-          pushNewline();
-        } else if (strncasecmp(t, "p", 1) == 0 ||
-                   strncasecmp(t, "br", 2) == 0 ||
-                   strncasecmp(t, "div", 3) == 0) {
+        if (t[0] == 'h' || t[0] == 'H') {
+          if (t[1] == '1') {
+            currentStyle = TextStyle::H1;
+            pushNewline();
+          } else if (t[1] == '2') {
+            currentStyle = TextStyle::H2;
+            pushNewline();
+          } else if (t[1] == '3') {
+            currentStyle = TextStyle::H3;
+            pushNewline();
+          }
+        } else if (t[0] == 'p' || t[0] == 'P' ||
+                   (t[0] == 'b' && (t[1] == 'r' || t[1] == 'R')) ||
+                   (t[0] == 'd' && (t[1] == 'i' || t[1] == 'I'))) {
+          // Basic check for p, br, div
           pushNewline();
         } else if (strncasecmp(t, "script", 6) == 0) {
           inScript = true;

@@ -53,7 +53,7 @@ bool EpubReader::Open(const char *path) {
     rootDir = opfPathStr.substr(0, lastSlash + 1);
   }
 
-  bool success = ParseContentOpf((const uint8_t *)opfData, rootDir);
+  bool success = ParseContentOpf((const uint8_t *)opfData, opfSize, rootDir);
   mz_free(opfData);
 
   return success;
@@ -124,11 +124,10 @@ void RecursiveParseNcx(pugi::xml_node parent, const std::string &rootDir,
   }
 }
 
-bool EpubReader::ParseContentOpf(const uint8_t *data,
+bool EpubReader::ParseContentOpf(const uint8_t *data, size_t size,
                                  const std::string &rootDir) {
   pugi::xml_document doc;
-  pugi::xml_parse_result result =
-      doc.load_buffer(data, strlen((const char *)data));
+  pugi::xml_parse_result result = doc.load_buffer(data, size);
   if (!result)
     return false;
 

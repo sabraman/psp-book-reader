@@ -73,7 +73,10 @@ void TextRenderer::CleanupCache() {
 
 void TextRenderer::ClearCache() { CleanupCache(); }
 
-void TextRenderer::ClearMetricsCache() { metricsCache.clear(); }
+void TextRenderer::ClearMetricsCache() {
+  metricsCache.clear();
+  metricsLruList.clear();
+}
 
 void TextRenderer::SetFontMode(FontMode mode) {
   if (currentMode != mode) {
@@ -135,6 +138,12 @@ uint64_t TextRenderer::GetCacheKey(const char *text, TextStyle style) {
 
 void TextRenderer::RenderText(const char *text, int x, int y, uint32_t color,
                               TextStyle style, float angle) {
+  RenderTextWithKey(text, GetCacheKey(text, style), x, y, color, style, angle);
+}
+
+void TextRenderer::RenderTextWithKey(const char *text, uint64_t key, int x,
+                                     int y, uint32_t color, TextStyle style,
+                                     float angle) {
   if (!renderer || !text || text[0] == '\0')
     return;
 
@@ -153,25 +162,20 @@ void TextRenderer::RenderText(const char *text, int x, int y, uint32_t color,
   if (!font)
     return;
 
-  uint64_t key = GetCacheKey(text, style);
   CachedTexture *cached = nullptr;
 
   auto it = cache.find(key);
   if (it != cache.end()) {
     cached = &it->second;
     // Update LRU: move to back
-    for (auto itL = lruList.begin(); itL != lruList.end(); ++itL) {
-      if (*itL == key) {
-        lruList.erase(itL);
-        break;
-      }
-    }
+    lruList.erase(cached->lruIt);
     lruList.push_back(key);
+    cached->lruIt = std::prev(lruList.end());
   } else {
     // Evict if cache full
     if (cache.size() >= MAX_CACHE_SIZE && !lruList.empty()) {
       uint64_t oldKey = lruList.front();
-      lruList.erase(lruList.begin());
+      lruList.pop_front();
       if (cache[oldKey].texture) {
         SDL_DestroyTexture(cache[oldKey].texture);
       }
@@ -189,9 +193,10 @@ void TextRenderer::RenderText(const char *text, int x, int y, uint32_t color,
       return;
     }
 
-    CachedTexture newEntry = {texture, surface->w, surface->h};
-    cache[key] = newEntry;
     lruList.push_back(key);
+    CachedTexture newEntry = {texture, surface->w, surface->h,
+                              std::prev(lruList.end())};
+    cache[key] = newEntry;
     cached = &cache[key];
     SDL_FreeSurface(surface);
   }
@@ -216,24 +221,39 @@ void TextRenderer::RenderText(const char *text, int x, int y, uint32_t color,
 
 void TextRenderer::RenderTextCentered(const char *text, int y, uint32_t color,
                                       TextStyle style, float angle) {
-  int width = MeasureTextWidth(text, style);
+  RenderTextCenteredWithKey(text, GetCacheKey(text, style), y, color, style,
+                            angle);
+}
+
+void TextRenderer::RenderTextCenteredWithKey(const char *text, uint64_t key,
+                                             int y, uint32_t color,
+                                             TextStyle style, float angle) {
+  int width = MeasureTextWidthWithKey(text, key, style);
   if (angle != 0.0f) {
     int tx = (272 - width) / 2;
-    RenderText(text, 480 - y, tx, color, style, angle);
+    RenderTextWithKey(text, key, 480 - y, tx, color, style, angle);
   } else {
     int x = (480 - width) / 2;
-    RenderText(text, x, y, color, style, 0.0f);
+    RenderTextWithKey(text, key, x, y, color, style, 0.0f);
   }
 }
 
 int TextRenderer::MeasureTextWidth(const char *text, TextStyle style) {
+  return MeasureTextWidthWithKey(text, GetCacheKey(text, style), style);
+}
+
+int TextRenderer::MeasureTextWidthWithKey(const char *text, uint64_t key,
+                                          TextStyle style) {
   if (!text || text[0] == '\0')
     return 0;
 
-  uint64_t key = GetCacheKey(text, style);
   auto it = metricsCache.find(key);
   if (it != metricsCache.end()) {
-    return it->second;
+    // Update metrics LRU: move to back
+    metricsLruList.erase(it->second.lruIt);
+    metricsLruList.push_back(key);
+    it->second.lruIt = std::prev(metricsLruList.end());
+    return it->second.width;
   }
 
   TTF_Font *font = nullptr;
@@ -253,7 +273,16 @@ int TextRenderer::MeasureTextWidth(const char *text, TextStyle style) {
 
   int w, h;
   if (TTF_SizeUTF8(font, text, &w, &h) == 0) {
-    metricsCache[key] = w;
+    // Evict if metrics cache full
+    if (metricsCache.size() >= MAX_METRICS_CACHE_SIZE &&
+        !metricsLruList.empty()) {
+      uint64_t oldKey = metricsLruList.front();
+      metricsLruList.pop_front();
+      metricsCache.erase(oldKey);
+    }
+
+    metricsLruList.push_back(key);
+    metricsCache[key] = {w, std::prev(metricsLruList.end())};
     return w;
   }
   return 0;
