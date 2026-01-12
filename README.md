@@ -73,8 +73,15 @@ The PSP screen is 480x272. Reading text horizontally is cramped.
 
 ### 4. Text Layout Engine
 We bypass complex line-breaking algorithms (like ICU) for speed.
--   **Approximation**: We use a greedy algorithm for word wrapping (`ChapterRenderer::WrapText`), estimating character widths.
 -   **Caching**: Rendered text lines are cached in `SDL_Texture`s to prevent re-rendering every frame. The cache is aggressively cleared (`renderer.ClearCache()`) whenever the page changes to free VRAM.
+
+### 5. Zero-Overhead Font Switching
+To support CJK languages without destroying performance, we avoid per-character checks during the render loop.
+-   **Method**: We detect the book's language (`<dc:language>`) upon load.
+-   **Optimization**:
+    -   If the book is **Chinese/Japanese/Korean**, we lock the renderer to *only* use `Droid Sans Fallback`.
+    -   If the book is **English/Cyrillic**, we lock it to *only* use `Inter`.
+-   **Result**: This allows us to support wide characters with **zero CPU overhead** during the critical render path, maintaining 60FPS.
 
 ## Contribution
 
