@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <cstring>
 #include <dirent.h>
+#include <fstream>
+#include <map>
+#include <sstream>
 #include <sys/stat.h>
 
 LibraryManager::LibraryManager() {}
@@ -21,15 +24,31 @@ void LibraryManager::Clear() {
 
 bool LibraryManager::ScanDirectory(const std::string &path) {
   Clear();
+  std::string cachePath = path + "/library.cache";
+
+  // Load existing metadata from cache for faster scanning
+  std::map<std::string, std::pair<std::string, std::string>> cacheMap;
+  std::ifstream cacheFile(cachePath);
+  if (cacheFile.is_open()) {
+    std::string line;
+    while (std::getline(cacheFile, line)) {
+      std::stringstream ss(line);
+      std::string fname, title, author;
+      if (std::getline(ss, fname, '|') && std::getline(ss, title, '|') &&
+          std::getline(ss, author)) {
+        cacheMap[fname] = {title, author};
+      }
+    }
+    cacheFile.close();
+  }
+
   DIR *dir = opendir(path.c_str());
   if (!dir) {
     DebugLogger::Log("Failed to open directory: %s", path.c_str());
-    // Try fallback to standard PSP path
-    dir = opendir("ms0:/PSP/GAME/pspepub/books/");
-    if (!dir)
-      return false;
+    return false;
   }
 
+  bool cacheDirty = false;
   struct dirent *entry;
   while ((entry = readdir(dir)) != nullptr) {
     if (entry->d_name[0] == '.')
@@ -38,22 +57,43 @@ bool LibraryManager::ScanDirectory(const std::string &path) {
     const char *ext = strrchr(entry->d_name, '.');
     if (ext && strcasecmp(ext, ".epub") == 0) {
       std::string fullPath = path + "/" + entry->d_name;
-      EpubReader reader;
-      if (reader.Open(fullPath.c_str())) {
+
+      if (cacheMap.count(fullPath)) {
         BookEntry book;
         book.filename = fullPath;
-        book.title = reader.GetMetadata().title;
-        book.author = reader.GetMetadata().author;
-        book.thumbnail = nullptr;
-        book.thumbW = 0;
-        book.thumbH = 0;
-
+        book.title = cacheMap[fullPath].first;
+        book.author = cacheMap[fullPath].second;
         books.push_back(book);
-        DebugLogger::Log("Library found: %s", book.title.c_str());
+      } else {
+        EpubReader reader;
+        if (reader.Open(fullPath.c_str())) {
+          BookEntry book;
+          book.filename = fullPath;
+          book.title = reader.GetMetadata().title;
+          book.author = reader.GetMetadata().author;
+          books.push_back(book);
+
+          cacheMap[fullPath] = {book.title, book.author};
+          cacheDirty = true;
+          DebugLogger::Log("Library found (new): %s", book.title.c_str());
+        }
       }
     }
   }
   closedir(dir);
+
+  if (cacheDirty) {
+    std::ofstream outFile(cachePath);
+    if (outFile.is_open()) {
+      for (const auto &book : books) {
+        outFile << book.filename << "|" << book.title << "|" << book.author
+                << "\n";
+      }
+      outFile.close();
+      DebugLogger::Log("Library cache updated: %s", cachePath.c_str());
+    }
+  }
+
   return !books.empty();
 }
 

@@ -32,6 +32,9 @@ public:
 private:
   std::vector<BookEntry> books;
   SDL_Texture *CreateThumbnail(SDL_Renderer *renderer, EpubReader &reader);
+
+  void LoadCache(const std::string &path);
+  void SaveCache(const std::string &path);
 };
 
 #endif

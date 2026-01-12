@@ -13,9 +13,10 @@ bool HtmlTextExtractor::IsWhitespace(char c) {
 }
 
 int HtmlTextExtractor::ExtractWords(const char *html, char **words,
-                                    TextStyle *styles, int maxWords,
-                                    char *wordBuffer, int bufferSize) {
-  if (!html || !words || !styles || maxWords == 0 || !wordBuffer ||
+                                    TextStyle *styles, int *wordLens,
+                                    int maxWords, char *wordBuffer,
+                                    int bufferSize) {
+  if (!html || !words || !styles || !wordLens || maxWords == 0 || !wordBuffer ||
       bufferSize == 0)
     return 0;
 
@@ -36,6 +37,7 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
         strcpy(wordBuffer + bufferPos, currentWord);
         words[wordCount] = wordBuffer + bufferPos;
         styles[wordCount] = currentStyle;
+        wordLens[wordCount] = currentWordLen;
         wordCount++;
         bufferPos += currentWordLen + 1;
       }
@@ -48,6 +50,7 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       strcpy(wordBuffer + bufferPos, "\n");
       words[wordCount] = wordBuffer + bufferPos;
       styles[wordCount] = TextStyle::NORMAL; // Newlines are style-neutral
+      wordLens[wordCount] = 1;
       wordCount++;
       bufferPos += 2;
     }

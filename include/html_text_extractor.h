@@ -13,7 +13,8 @@ public:
   // Extract words from HTML with style flags
   // Returns number of words found.
   int ExtractWords(const char *html, char **words, TextStyle *styles,
-                   int maxWords, char *wordBuffer, int bufferSize);
+                   int *wordLens, int maxWords, char *wordBuffer,
+                   int bufferSize);
 
 private:
   bool IsWhitespace(char c);

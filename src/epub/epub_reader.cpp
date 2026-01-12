@@ -230,24 +230,42 @@ uint8_t *EpubReader::LoadChapter(int chapterIndex) {
     return nullptr;
   mz_zip_archive *zip = (mz_zip_archive *)zipArchive;
   ChapterInfo &chapter = metadata.spine[chapterIndex];
-  size_t chapterSize;
-  uint8_t *chapterData = (uint8_t *)mz_zip_reader_extract_file_to_heap(
-      zip, chapter.href, &chapterSize, 0);
-  if (chapterData) {
-    uint8_t *terminated = (uint8_t *)realloc(chapterData, chapterSize + 1);
-    if (terminated) {
-      terminated[chapterSize] = '\0';
-      return terminated;
-    }
-    return chapterData;
+
+  uint8_t *buffer = (uint8_t *)malloc(chapter.uncompSize + 1);
+  if (!buffer)
+    return nullptr;
+
+  if (!mz_zip_reader_extract_file_to_mem(zip, chapter.href, buffer,
+                                         chapter.uncompSize, 0)) {
+    free(buffer);
+    return nullptr;
   }
-  return nullptr;
+
+  buffer[chapter.uncompSize] = '\0';
+  return buffer;
 }
 
 uint8_t *EpubReader::LoadCover(size_t *outSize) {
-  if (!zipArchive || strlen(metadata.coverHref) == 0)
+  if (!zipArchive || metadata.coverHref[0] == '\0')
     return nullptr;
   mz_zip_archive *zip = (mz_zip_archive *)zipArchive;
+
+  int fileIndex =
+      mz_zip_reader_locate_file(zip, metadata.coverHref, nullptr, 0);
+  if (fileIndex < 0)
+    return nullptr;
+
+  mz_zip_archive_file_stat fileStat;
+  if (!mz_zip_reader_file_stat(zip, fileIndex, &fileStat))
+    return nullptr;
+
+  // Cover Guard: Refuse to load if uncompressed size > 2MB to prevent OOM
+  if (fileStat.m_uncomp_size > 2 * 1024 * 1024) {
+    DebugLogger::Log("Cover too large: %u bytes. Skipping.",
+                     (uint32_t)fileStat.m_uncomp_size);
+    return nullptr;
+  }
+
   return (uint8_t *)mz_zip_reader_extract_file_to_heap(zip, metadata.coverHref,
                                                        outSize, 0);
 }

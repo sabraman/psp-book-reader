@@ -32,7 +32,6 @@
 // Reader Layout Constants
 #define LAYOUT_MARGIN 24
 #define LAYOUT_START_Y 45
-#define LAYOUT_LINE_SPACE 24.0f
 
 struct LineInfo {
   char text[MAX_LINE_LEN];
@@ -66,10 +65,12 @@ static std::vector<int> pageAnchors; // wordIndex for start of each page
 static int currentPageIdx = 0;
 
 static char *words[MAX_WORDS];
+static int wordLens[MAX_WORDS];
 static TextStyle wordStyles[MAX_WORDS];
 static int wordWidths[MAX_WORDS]; // Cached widths for O(N) layout
 static char wordBuffer[WORD_BUFFER_SIZE];
 static int cachedSpaceWidths[6]; // Cache space width per style
+static bool spaceWidthsDirty = true;
 
 enum AppState { STATE_LIBRARY, STATE_READER };
 static AppState currentState = STATE_LIBRARY;
@@ -110,9 +111,10 @@ void resetLayout(int chapterIndex, EpubReader &reader,
   memset(wordBuffer, 0, WORD_BUFFER_SIZE);
   memset(words, 0, sizeof(words));
   memset(wordStyles, 0, sizeof(wordStyles));
+  memset(wordLens, 0, sizeof(wordLens));
 
-  extractor.ExtractWords((char *)raw_data, words, wordStyles, MAX_WORDS,
-                         wordBuffer, WORD_BUFFER_SIZE);
+  extractor.ExtractWords((char *)raw_data, words, wordStyles, wordLens,
+                         MAX_WORDS, wordBuffer, WORD_BUFFER_SIZE);
   free(raw_data);
 
   for (int i = 0; i < MAX_WORDS; i++) {
@@ -151,6 +153,7 @@ void reflowLayout() {
   }
 
   memset(wordWidths, -1, sizeof(wordWidths));
+  spaceWidthsDirty = true;
 
   layoutState.wordIdx = 0;
   layoutState.lineCount = 0;
@@ -174,7 +177,9 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
                            : (SCREEN_WIDTH - 2 * LAYOUT_MARGIN);
   int availableHeight =
       (isRotated ? SCREEN_WIDTH : SCREEN_HEIGHT) - LAYOUT_START_Y - 25;
-  linesPerPage = availableHeight / (int)(LAYOUT_LINE_SPACE * readerFontScale);
+  int baseHeight = renderer.GetLineHeight(TextStyle::NORMAL);
+  int stepY = (int)(baseHeight * 1.35f); // 1.35x line spacing
+  linesPerPage = availableHeight / stepY;
   if (linesPerPage < 1)
     linesPerPage = 1;
 
@@ -182,8 +187,11 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
   int wordsProcessed = 0;
 
   // Pre-cache space widths for common styles if needed
-  for (int i = 0; i < 6; i++) {
-    cachedSpaceWidths[i] = renderer.MeasureTextWidth(" ", (TextStyle)i);
+  if (spaceWidthsDirty) {
+    for (int i = 0; i < 6; i++) {
+      cachedSpaceWidths[i] = renderer.MeasureTextWidth(" ", (TextStyle)i);
+    }
+    spaceWidthsDirty = false;
   }
 
   while (layoutState.wordIdx < MAX_WORDS &&
@@ -231,7 +239,7 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
       char *linePtr = chapterLines[totalLines].text;
       int lineLen = 0;
       for (int i = lineStartWordIdx; i < layoutState.wordIdx; i++) {
-        int wlen = (words[i] != nullptr) ? strlen(words[i]) : 0;
+        int wlen = wordLens[i];
         if (lineLen + wlen + 2 < MAX_LINE_LEN) {
           if (i > lineStartWordIdx) {
             linePtr[lineLen++] = ' ';
@@ -285,6 +293,7 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
 
 int main(int argc, char *argv[]) {
   DebugLogger::Init();
+  scePowerSetClockFrequency(333, 333, 166);
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) <
       0)
     return 1;
@@ -599,6 +608,7 @@ int main(int argc, char *argv[]) {
           currentState = STATE_LIBRARY;
           renderer.SetFontMode(FontMode::SMART);
           renderer.LoadFont(1.0f);
+          spaceWidthsDirty = true;
           renderer.ClearCache();
         }
         if (input.TrianglePressed()) {
@@ -668,9 +678,11 @@ int main(int argc, char *argv[]) {
                                         TextStyle::TITLE, 90.0f);
           }
         } else {
-          renderer.RenderTextCentered(meta.author, 80, 0xFFFFFFFF,
+          int authorY = isRotated ? 60 : 80;
+          int titleY = authorY + (int)(40 * readerFontScale);
+          renderer.RenderTextCentered(meta.author, authorY, 0xFFFFFFFF,
                                       TextStyle::H2, 0.0f);
-          renderer.RenderTextCentered(meta.title, 120, 0xFFFFFFFF,
+          renderer.RenderTextCentered(meta.title, titleY, 0xFFFFFFFF,
                                       TextStyle::TITLE, 0.0f);
         }
       } else {
@@ -682,7 +694,8 @@ int main(int argc, char *argv[]) {
           renderer.RenderTextCentered(headerTitle, 10, 0xFF888888,
                                       TextStyle::SMALL, 0.0f);
 
-        int stepY = (int)(LAYOUT_LINE_SPACE * readerFontScale);
+        int baseHeight = renderer.GetLineHeight(TextStyle::NORMAL);
+        int stepY = (int)(baseHeight * 1.35f);
         for (int i = 0; i < linesPerPage && (currentLine + i) < totalLines;
              i++) {
           TextStyle s = chapterLines[currentLine + i].style;

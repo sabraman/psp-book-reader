@@ -38,6 +38,7 @@ public:
                           float angle = 0.0f);
 
   int MeasureTextWidth(const char *text, TextStyle style = TextStyle::NORMAL);
+  int GetLineHeight(TextStyle style = TextStyle::NORMAL);
 
   float GetFontScale() const { return fontScale; }
 
@@ -58,10 +59,16 @@ private:
   };
 
   // Cache key will now include the style
-  std::unordered_map<std::string, CachedTexture> cache;
-  // Word width cache to speed up MeasureTextWidth
-  std::unordered_map<std::string, int> metricsCache;
+  // Cache key will now be a numeric hash
+  std::unordered_map<uint64_t, CachedTexture> cache;
+  // Word width cache
+  std::unordered_map<uint64_t, int> metricsCache;
 
   void CleanupCache();
-  std::string GetCacheKey(const char *text, TextStyle style);
+  void CloseFonts();
+  // Use a combined hash of string + style for faster lookups
+  uint64_t GetCacheKey(const char *text, TextStyle style);
+
+  const size_t MAX_CACHE_SIZE = 120;
+  std::vector<uint64_t> lruList;
 };
