@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <pspdisplay.h>
 #include <pspkernel.h>
 #include <psppower.h>
 #include <psprtc.h>
@@ -252,7 +253,7 @@ int main(int argc, char *argv[]) {
   renderer.LoadFont(1.0f);
 
   LibraryManager library;
-  library.ScanDirectory(sdlRenderer, "books");
+  library.ScanDirectory("books");
 
   EpubReader reader;
   HtmlTextExtractor htmlExtractor;
@@ -283,7 +284,7 @@ int main(int argc, char *argv[]) {
         renderer.RenderTextCentered("SCANNING LIBRARY...", 120, 0xFFFFFFFF,
                                     TextStyle::H2);
         SDL_RenderPresent(sdlRenderer);
-        library.ScanDirectory(sdlRenderer, "books");
+        library.ScanDirectory("books");
         isScanning = false;
         continue;
       }
@@ -363,7 +364,18 @@ int main(int argc, char *argv[]) {
         int startX = 40;
         int spacing = 110;
         // Simple slider animation logic (scroll logic)
+        // Lazy loading/unloading logic
         int scrollOffset = (libSelection > 3) ? (libSelection - 3) : 0;
+        for (int i = 0; i < (int)books.size(); i++) {
+          if (i >= scrollOffset && i < scrollOffset + 4) {
+            library.LoadThumbnail(sdlRenderer, i);
+          } else {
+            // Unload if far away (e.g. > 10 items away) to avoid thrashing
+            if (abs(i - libSelection) > 10) {
+              library.UnloadThumbnail(i);
+            }
+          }
+        }
 
         for (int i = 0; i < 4 && (scrollOffset + i) < (int)books.size(); i++) {
           int idx = scrollOffset + i;
@@ -764,6 +776,8 @@ int main(int argc, char *argv[]) {
     }
 
     SDL_RenderPresent(sdlRenderer);
+    // Sync to VBlank for smooth 60fps on real hardware
+    sceDisplayWaitVblankStart();
     SDL_Delay(16);
   }
 

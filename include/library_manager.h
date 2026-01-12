@@ -21,9 +21,13 @@ public:
   LibraryManager();
   ~LibraryManager();
 
-  bool ScanDirectory(SDL_Renderer *renderer, const std::string &path);
-  const std::vector<BookEntry> &GetBooks() const { return books; }
+  bool ScanDirectory(const std::string &path);
   void Clear();
+
+  void LoadThumbnail(SDL_Renderer *renderer, int index);
+  void UnloadThumbnail(int index);
+
+  const std::vector<BookEntry> &GetBooks() const { return books; }
 
 private:
   std::vector<BookEntry> books;

@@ -59,32 +59,39 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       commitWord();
       inTag = true;
 
-      if (strncasecmp(&html[i], "<script", 7) == 0)
-        inScript = true;
-      else if (strncasecmp(&html[i], "<style", 6) == 0)
-        inStyle = true;
-      else if (strncasecmp(&html[i], "</script", 8) == 0)
-        inScript = false;
-      else if (strncasecmp(&html[i], "</style", 7) == 0)
-        inStyle = false;
-      else if (strncasecmp(&html[i], "<h1", 3) == 0) {
-        currentStyle = TextStyle::H1;
-        pushNewline();
-      } else if (strncasecmp(&html[i], "<h2", 3) == 0) {
-        currentStyle = TextStyle::H2;
-        pushNewline();
-      } else if (strncasecmp(&html[i], "<h3", 3) == 0) {
-        currentStyle = TextStyle::H3;
-        pushNewline();
-      } else if (strncasecmp(&html[i], "</h1", 4) == 0 ||
-                 strncasecmp(&html[i], "</h2", 4) == 0 ||
-                 strncasecmp(&html[i], "</h3", 4) == 0) {
-        currentStyle = TextStyle::NORMAL;
-        pushNewline();
-      } else if (strncasecmp(&html[i], "<p", 2) == 0 ||
-                 strncasecmp(&html[i], "<br", 3) == 0 ||
-                 strncasecmp(&html[i], "<div", 4) == 0) {
-        pushNewline();
+      const char *t = &html[i + 1];
+      if (*t == '/') {
+        // Closing tags
+        t++;
+        if (strncasecmp(t, "h1", 2) == 0 || strncasecmp(t, "h2", 2) == 0 ||
+            strncasecmp(t, "h3", 2) == 0) {
+          currentStyle = TextStyle::NORMAL;
+          pushNewline();
+        } else if (strncasecmp(t, "script", 6) == 0) {
+          inScript = false;
+        } else if (strncasecmp(t, "style", 5) == 0) {
+          inStyle = false;
+        }
+      } else {
+        // Opening tags
+        if (strncasecmp(t, "h1", 2) == 0) {
+          currentStyle = TextStyle::H1;
+          pushNewline();
+        } else if (strncasecmp(t, "h2", 2) == 0) {
+          currentStyle = TextStyle::H2;
+          pushNewline();
+        } else if (strncasecmp(t, "h3", 2) == 0) {
+          currentStyle = TextStyle::H3;
+          pushNewline();
+        } else if (strncasecmp(t, "p", 1) == 0 ||
+                   strncasecmp(t, "br", 2) == 0 ||
+                   strncasecmp(t, "div", 3) == 0) {
+          pushNewline();
+        } else if (strncasecmp(t, "script", 6) == 0) {
+          inScript = true;
+        } else if (strncasecmp(t, "style", 5) == 0) {
+          inStyle = true;
+        }
       }
     } else if (c == '>') {
       inTag = false;

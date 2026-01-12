@@ -118,11 +118,14 @@ bool TextRenderer::LoadFont(float scale) {
 }
 
 std::string TextRenderer::GetCacheKey(const char *text, TextStyle style) {
-  char buf[32];
-  // Cache key includes mode to prevent collisions if we switch modes without
-  // clearing
-  snprintf(buf, 32, "%d_%d_", (int)style, (int)currentMode);
-  return std::string(buf) + text;
+  char buf[512];
+  int len = snprintf(buf, sizeof(buf), "%d_%d_%s", (int)style, (int)currentMode,
+                     text);
+  if (len >= (int)sizeof(buf)) {
+    return std::to_string((int)style) + "_" + std::to_string((int)currentMode) +
+           "_" + text;
+  }
+  return std::string(buf);
 }
 
 void TextRenderer::RenderText(const char *text, int x, int y, uint32_t color,

@@ -19,8 +19,7 @@ void LibraryManager::Clear() {
   books.clear();
 }
 
-bool LibraryManager::ScanDirectory(SDL_Renderer *renderer,
-                                   const std::string &path) {
+bool LibraryManager::ScanDirectory(const std::string &path) {
   Clear();
   DIR *dir = opendir(path.c_str());
   if (!dir) {
@@ -45,13 +44,9 @@ bool LibraryManager::ScanDirectory(SDL_Renderer *renderer,
         book.filename = fullPath;
         book.title = reader.GetMetadata().title;
         book.author = reader.GetMetadata().author;
-        book.thumbnail = CreateThumbnail(renderer, reader);
-
-        // Get thumb dimensions
-        if (book.thumbnail) {
-          SDL_QueryTexture(book.thumbnail, nullptr, nullptr, &book.thumbW,
-                           &book.thumbH);
-        }
+        book.thumbnail = nullptr;
+        book.thumbW = 0;
+        book.thumbH = 0;
 
         books.push_back(book);
         DebugLogger::Log("Library found: %s", book.title.c_str());
@@ -60,6 +55,30 @@ bool LibraryManager::ScanDirectory(SDL_Renderer *renderer,
   }
   closedir(dir);
   return !books.empty();
+}
+
+void LibraryManager::LoadThumbnail(SDL_Renderer *renderer, int index) {
+  if (index < 0 || index >= (int)books.size() || books[index].thumbnail)
+    return;
+
+  EpubReader reader;
+  if (reader.Open(books[index].filename.c_str())) {
+    books[index].thumbnail = CreateThumbnail(renderer, reader);
+    if (books[index].thumbnail) {
+      SDL_QueryTexture(books[index].thumbnail, nullptr, nullptr,
+                       &books[index].thumbW, &books[index].thumbH);
+    }
+  }
+}
+
+void LibraryManager::UnloadThumbnail(int index) {
+  if (index < 0 || index >= (int)books.size() || !books[index].thumbnail)
+    return;
+
+  SDL_DestroyTexture(books[index].thumbnail);
+  books[index].thumbnail = nullptr;
+  books[index].thumbW = 0;
+  books[index].thumbH = 0;
 }
 
 SDL_Texture *LibraryManager::CreateThumbnail(SDL_Renderer *renderer,

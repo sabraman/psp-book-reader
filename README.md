@@ -83,6 +83,11 @@ To support CJK languages without destroying performance, we avoid per-character 
     -   If the book is **English/Cyrillic**, we lock it to *only* use `Inter`.
 -   **Result**: This allows us to support wide characters with **zero CPU overhead** during the critical render path, maintaining 60FPS.
 
+### 6. Lazy Memory Management
+To avoid crashing the 32MB/64MB PSP hardware with large libraries, we use a **Lazy Loading** strategy for UI assets.
+-   **Thumbnails**: Instead of loading all book covers at startup, the app only loads the `SDL_Texture`s for the 4 books currently visible on screen.
+-   **Unloading**: If the user scrolls far away, textures are destroyed to free VRAM/RAM for newly scrolled items.
+
 ## Contribution
 
 Contributions are welcome!
