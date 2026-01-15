@@ -12,6 +12,7 @@ A modern, feature-rich EPUB reader for the Sony PlayStation Portable (PSP), buil
 -   **Fast Navigation**: Smart chapter menu with minimalist page indicators.
 -   **Library Snapshot Caching**: Near-instant library scanning by caching book metadata.
 -   **Deeply Optimized**: High-performance C++ engine featuring O(1) LRU caches, keyed rendering, and throttled background layout for a butter-smooth reading experience.
+-   **Persistent Settings**: Customize your reading experience with adjustable **Font Size**, **Line Spacing**, **Margins**, and **Visual Themes** (Night, Sepia, Light).
 -   **System Status**: Real-time clock and battery percentage available in both Library and Reader views.
 -   **Wide Character Support**: Automatically switches to **Droid Sans Fallback** for CJK books while keeping **Inter** for Latin/Cyrillic.
 
@@ -23,10 +24,10 @@ A modern, feature-rich EPUB reader for the Sony PlayStation Portable (PSP), buil
 | **Circle (O)** | Rotate Screen (TATE Mode) |
 | **Triangle** | Open/Close Chapter Menu |
 | **Start** | Return to Library (from Reader) / Exit App (from Library) |
-| **Select** | Toggle Status Overlay (Time & Battery) |
+| **Select** | Open Settings Menu (Themes, Fonts, Spacing) |
 | **L / R Triggers** | Fast Scroll (Library) / Previous/Next Page (Reader) |
-| **D-Pad Up/Down** | Font Size (Reader) / Navigate Menu |
-| **D-Pad Left/Right** | Navigate Library |
+| **D-Pad Up/Down** | Navigate Menu / Font Size (Reader) |
+| **D-Pad Left/Right** | Navigate Library / Adjust Settings |
 
 ## Build Instructions
 
