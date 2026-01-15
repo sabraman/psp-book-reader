@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common_types.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <iterator>
@@ -58,7 +59,11 @@ public:
   void ClearMetricsCache();
   bool IsValid() const { return !fonts.empty(); }
 
+  void SetTheme(Theme theme);
+  const ThemeColors &GetThemeColors() const { return themeColors; }
+
 private:
+  ThemeColors themeColors;
   SDL_Renderer *renderer;
   std::unordered_map<TextStyle, TTF_Font *> fonts;
   std::unordered_map<TextStyle, TTF_Font *> fallbackFonts;

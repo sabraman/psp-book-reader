@@ -115,7 +115,7 @@ void RecursiveParseNcx(pugi::xml_node parent, const std::string &rootDir,
       // main chapters with sub-sections
       if (hrefToTitle.find(fullHref) == hrefToTitle.end()) {
         hrefToTitle[fullHref] = label;
-        DebugLogger::Log("NCX Match: %s -> %s", fullHref.c_str(), label);
+        // DebugLogger::Log("NCX Match: %s -> %s", fullHref.c_str(), label);
       }
     }
 
@@ -264,6 +264,9 @@ uint8_t *EpubReader::LoadCover(size_t *outSize) {
                      (uint32_t)fileStat.m_uncomp_size);
     return nullptr;
   }
+
+  DebugLogger::Log("LoadCover: Extracting %s (%u bytes)", metadata.coverHref,
+                   (uint32_t)fileStat.m_uncomp_size);
 
   return (uint8_t *)mz_zip_reader_extract_file_to_heap(zip, metadata.coverHref,
                                                        outSize, 0);

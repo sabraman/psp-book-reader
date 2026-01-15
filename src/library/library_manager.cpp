@@ -71,11 +71,32 @@ bool LibraryManager::ScanDirectory(const std::string &path) {
           book.filename = fullPath;
           book.title = sharedReader.GetMetadata().title;
           book.author = sharedReader.GetMetadata().author;
+
+          // Fallback if metadata is empty
+          if (book.title.empty())
+            book.title = entry->d_name;
+          if (book.author.empty())
+            book.author = "Unknown";
+
           books.push_back(book);
 
           cacheMap[fullPath] = {book.title, book.author};
           cacheDirty = true;
           DebugLogger::Log("Library found (new): %s", book.title.c_str());
+        } else {
+          // Fallback: Add file even if parsing fails (so it shows up)
+          DebugLogger::Log("Failed to parse EPUB: %s. Adding fallback.",
+                           entry->d_name);
+          BookEntry book;
+          book.filename = fullPath;
+          book.title = entry->d_name; // Use filename as title
+          book.author = "Unknown (Parse Error)";
+          books.push_back(book);
+
+          // Add to cache so we don't retry parsing every boot (unless user
+          // deletes cache)
+          cacheMap[fullPath] = {book.title, book.author};
+          cacheDirty = true;
         }
       }
     }
@@ -101,13 +122,20 @@ void LibraryManager::LoadThumbnail(SDL_Renderer *renderer, int index) {
   if (index < 0 || index >= (int)books.size() || books[index].thumbnail)
     return;
 
+  DebugLogger::Log("Loading thumbnail for: %s", books[index].filename.c_str());
   EpubReader reader;
   if (reader.Open(books[index].filename.c_str())) {
     books[index].thumbnail = CreateThumbnail(renderer, reader);
     if (books[index].thumbnail) {
       SDL_QueryTexture(books[index].thumbnail, nullptr, nullptr,
                        &books[index].thumbW, &books[index].thumbH);
+    } else {
+      DebugLogger::Log("Thumbnail creation failed for: %s",
+                       books[index].filename.c_str());
     }
+  } else {
+    DebugLogger::Log("Failed to open ebook for thumbnail: %s",
+                     books[index].filename.c_str());
   }
 }
 
@@ -129,11 +157,20 @@ SDL_Texture *LibraryManager::CreateThumbnail(SDL_Renderer *renderer,
     return nullptr;
 
   SDL_RWops *rw = SDL_RWFromMem(data, size);
+  if (!rw) {
+    DebugLogger::Log("Failed to create RWops for cover (%zu bytes)", size);
+    free(data);
+    return nullptr;
+  }
+  DebugLogger::Log("CreateThumbnail: Loading image...");
   SDL_Surface *surface = IMG_Load_RW(rw, 1);
   free(data);
 
-  if (!surface)
+  if (!surface) {
+    DebugLogger::Log("IMG_Load_RW error: %s", IMG_GetError());
     return nullptr;
+  }
+  DebugLogger::Log("CreateThumbnail: Decoded %dx%d", surface->w, surface->h);
 
   // Target thumb size: ~100x150
   int tw = 100;
@@ -142,12 +179,25 @@ SDL_Texture *LibraryManager::CreateThumbnail(SDL_Renderer *renderer,
   int finalW = (int)(surface->w * scale);
   int finalH = (int)(surface->h * scale);
 
+  DebugLogger::Log("CreateThumbnail: Scaling to %dx%d", finalW, finalH);
   SDL_Surface *scaled = SDL_CreateRGBSurface(0, finalW, finalH, 32, 0, 0, 0, 0);
+  if (!scaled) {
+    DebugLogger::Log("SDL_CreateRGBSurface FAILED!");
+    SDL_FreeSurface(surface);
+    return nullptr;
+  }
   SDL_BlitScaled(surface, nullptr, scaled, nullptr);
   SDL_FreeSurface(surface);
 
+  DebugLogger::Log("CreateThumbnail: Creating texture...");
   SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, scaled);
   SDL_FreeSurface(scaled);
+
+  if (tex) {
+    DebugLogger::Log("CreateThumbnail: SUCCESS");
+  } else {
+    DebugLogger::Log("SDL_CreateTextureFromSurface FAILED!");
+  }
 
   return tex;
 }

@@ -4,6 +4,7 @@
 #include "html_text_extractor.h"
 #include "input_handler.h"
 #include "library_manager.h"
+#include "settings_manager.h"
 #include "text_renderer.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -40,6 +41,9 @@ struct LineInfo {
   uint64_t cacheKey; // Pre-calculated render key
 };
 
+static int layoutMargin = 24;
+static int layoutStartY = 45;
+
 static LineInfo chapterLines[MAX_CHAPTER_LINES];
 static int totalLines = 0;
 static int currentLine = 0;
@@ -74,8 +78,9 @@ static char wordBuffer[WORD_BUFFER_SIZE];
 static int cachedSpaceWidths[6]; // Cache space width per style
 static bool spaceWidthsDirty = true;
 
-enum AppState { STATE_LIBRARY, STATE_READER };
+enum AppState { STATE_LIBRARY, STATE_READER, STATE_SETTINGS };
 static AppState currentState = STATE_LIBRARY;
+static AppState previousState = STATE_LIBRARY; // To return from settings
 
 int running = 0;
 
@@ -184,12 +189,26 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
   if (layoutState.complete || layoutState.chapterIndex < 0)
     return true;
 
-  int maxWidth = isRotated ? (SCREEN_HEIGHT - 2 * LAYOUT_MARGIN)
-                           : (SCREEN_WIDTH - 2 * LAYOUT_MARGIN);
+  int maxWidth = isRotated ? (SCREEN_HEIGHT - 2 * layoutMargin)
+                           : (SCREEN_WIDTH - 2 * layoutMargin);
   int availableHeight =
-      (isRotated ? SCREEN_WIDTH : SCREEN_HEIGHT) - LAYOUT_START_Y - 25;
+      (isRotated ? SCREEN_WIDTH : SCREEN_HEIGHT) - layoutStartY - 25;
   int baseHeight = renderer.GetLineHeight(TextStyle::NORMAL);
-  int stepY = (int)(baseHeight * 1.35f); // 1.35x line spacing
+
+  float spacingMult = 1.35f;
+  switch (SettingsManager::Get().GetSettings().spacing) {
+  case SpacingPreset::TIGHT:
+    spacingMult = 1.15f;
+    break;
+  case SpacingPreset::NORMAL:
+    spacingMult = 1.35f;
+    break;
+  case SpacingPreset::LOOSE:
+    spacingMult = 1.6f;
+    break;
+  }
+
+  int stepY = (int)(baseHeight * spacingMult);
   linesPerPage = availableHeight / stepY;
   if (linesPerPage < 1)
     linesPerPage = 1;
@@ -311,30 +330,51 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
 }
 
 int main(int argc, char *argv[]) {
+  printf("PSP-BookReader: main() starting...\n");
   DebugLogger::Init();
+  DebugLogger::Log("App starting...");
+  SettingsManager::Get().Load();
+  DebugLogger::Log("Settings Loaded");
+
+  AppSettings &settings = SettingsManager::Get().GetSettings();
+  readerFontScale = settings.fontScale;
+  showStatusOverlay = settings.showStatus;
+  DebugLogger::Log("Font scale: %.1f, Themes: %d", readerFontScale,
+                   (int)settings.theme);
+
   scePowerSetClockFrequency(333, 333, 166);
+  printf("Initializing SDL...\n");
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) <
-      0)
+      0) {
+    printf("SDL_Init FAILED: %s\n", SDL_GetError());
     return 1;
+  }
 
   SDL_Joystick *joy = nullptr;
-  if (SDL_NumJoysticks() > 0)
+  if (SDL_NumJoysticks() > 0) {
+    printf("Opening Joystick 0...\n");
     joy = SDL_JoystickOpen(0);
+  }
 
   SDL_Window *window =
       SDL_CreateWindow("PSP-BookReader", SDL_WINDOWPOS_UNDEFINED,
                        SDL_WINDOWPOS_UNDEFINED, 480, 272, 0);
+  printf("Creating Renderer...\n");
   SDL_Renderer *sdlRenderer = SDL_CreateRenderer(
       window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
   SDL_Event event;
 
+  printf("Initializing TextRenderer...\n");
   TextRenderer renderer;
   renderer.Initialize(sdlRenderer);
-  renderer.LoadFont(1.0f);
+  printf("Loading fonts...\n");
+  if (!renderer.LoadFont(1.0f)) {
+    printf("CRITICAL: Failed to load fonts!\n");
+  }
 
   LibraryManager library;
-  library.ScanDirectory("books");
+  printf("Library Object Initialized (Deferred Scan)\n");
 
   EpubReader reader;
   HtmlTextExtractor htmlExtractor;
@@ -346,26 +386,61 @@ int main(int argc, char *argv[]) {
   int libSelection = 0;
   uint32_t frameCount = 0;
   bool isScanning = true;
+  DebugLogger::Log("Entering main loop");
+
+  int settingsSelection = 0;
 
   while (running) {
+    DebugLogger::Log("--- Frame %u Start ---", frameCount);
     frameCount++;
     input.Update();
+    const auto &books = library.GetBooks();
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_QUIT)
         running = 0;
       input.ProcessEvent(event);
     }
-    if (input.Exit()) {
+    if (input.StartPressed()) {
       if (currentState == STATE_READER) {
+        // Return to Library
+        if (currentChapter >= 0 && !books.empty() && libSelection >= 0 &&
+            libSelection < (int)books.size()) {
+          int wordIdx = 0;
+          if (currentLine >= 0 && currentLine < totalLines) {
+            wordIdx = chapterLines[currentLine].startWordIdx;
+          }
+          SettingsManager::Get().SaveProgress(
+              books[libSelection].filename.c_str(), currentChapter, wordIdx);
+        }
         currentState = STATE_LIBRARY;
         renderer.SetFontMode(FontMode::SMART);
         renderer.LoadFont(1.0f);
         spaceWidthsDirty = true;
         renderer.ClearCache();
-      } else {
-        break; // Exit app from library
+      } else if (currentState == STATE_SETTINGS) {
+        currentState = previousState;
+        SettingsManager::Get().Save();
       }
     }
+
+    if (input.SelectPressed()) {
+      if (currentState == STATE_READER) {
+        DebugLogger::Log("Input: SELECT pressed in READER -> SETTINGS");
+        previousState = STATE_READER;
+        currentState = STATE_SETTINGS;
+        settingsSelection = 0;
+      } else if (currentState == STATE_SETTINGS) {
+        DebugLogger::Log("Input: SELECT pressed in SETTINGS -> Return");
+        currentState = previousState;
+        SettingsManager::Get().Save();
+      }
+    }
+
+    if (input.Exit()) {
+      // Handled
+    }
+
+    const ThemeColors &themeColors = renderer.GetThemeColors();
 
     if (currentState == STATE_LIBRARY) {
       if (isScanning) {
@@ -376,6 +451,8 @@ int main(int argc, char *argv[]) {
         SDL_RenderPresent(sdlRenderer);
         library.ScanDirectory("books");
         isScanning = false;
+        DebugLogger::Log("Library scanned. Count: %d",
+                         (int)library.GetBooks().size());
         continue;
       }
 
@@ -401,8 +478,18 @@ int main(int argc, char *argv[]) {
             layoutState.complete = true;
             layoutState.chapterIndex = -1;
             renderer.LoadFont(readerFontScale);
+            renderer.SetTheme(SettingsManager::Get().GetSettings().theme);
 
-            // Select Font Mode based on Language
+            // Resume Logic
+            const BookProgress &prog = SettingsManager::Get().GetProgress();
+            if (strcmp(prog.path, books[libSelection].filename.c_str()) == 0) {
+              currentChapter = prog.chapterIndex;
+              if (currentChapter >= 0) {
+                resetLayout(currentChapter, reader, htmlExtractor);
+                layoutState.targetWordIdx = prog.wordIndex;
+                processLayout(reader, renderer, 1000);
+              }
+            }
             const char *lang = reader.GetMetadata().language;
             if (lang &&
                 (strncmp(lang, "zh", 2) == 0 || strncmp(lang, "ja", 2) == 0 ||
@@ -474,9 +561,11 @@ int main(int argc, char *argv[]) {
             }
           }
         }
+        DebugLogger::Log("Thumbnails loop finished");
 
         for (int i = 0; i < 4 && (scrollOffset + i) < (int)books.size(); i++) {
           int idx = scrollOffset + i;
+          DebugLogger::Log("Rendering book index: %d", idx);
           const auto &book = books[idx];
           int bx = startX + i * spacing;
           int by = 50;
@@ -551,7 +640,7 @@ int main(int argc, char *argv[]) {
           SDL_RenderFillRect(sdlRenderer, &dot);
         }
       }
-    } else {
+    } else if (currentState == STATE_READER) {
       // --- READER LOGIC ---
       const EpubMetadata &meta = reader.GetMetadata();
       // Background layout processing
@@ -579,10 +668,15 @@ int main(int argc, char *argv[]) {
           layoutNeedsReset = true;
           currentLine = 0;
           showChapterMenu = false;
-          renderer.ClearCache();
+          showChapterMenu = false;
         }
         if (input.TrianglePressed())
           showChapterMenu = false;
+
+        // Return to Library with SELECT+START or similar?
+        // User wants START for settings. Let's use TRIANGLE in Library or just
+        // specific back button. For now, let's add a "Back to Library" option
+        // in settings.
       } else {
         if (input.NextPage()) {
           if (currentChapter == -1) {
@@ -635,9 +729,6 @@ int main(int argc, char *argv[]) {
           reflowLayout();
           renderer.ClearCache();
         }
-        if (input.SelectPressed()) {
-          showStatusOverlay = !showStatusOverlay;
-        }
         if (input.TrianglePressed()) {
           showChapterMenu = true;
           menuSelection = (currentChapter < 0) ? 0 : currentChapter;
@@ -663,7 +754,9 @@ int main(int argc, char *argv[]) {
       }
 
       // --- READER RENDER ---
-      SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
+      SDL_SetRenderDrawColor(sdlRenderer, (themeColors.background >> 0) & 0xFF,
+                             (themeColors.background >> 8) & 0xFF,
+                             (themeColors.background >> 16) & 0xFF, 255);
       SDL_RenderClear(sdlRenderer);
 
       if (currentChapter == -1) {
@@ -714,7 +807,20 @@ int main(int argc, char *argv[]) {
                                       TextStyle::SMALL, 0.0f);
 
         int baseHeight = renderer.GetLineHeight(TextStyle::NORMAL);
-        int stepY = (int)(baseHeight * 1.35f);
+        float spacingMult = 1.35f;
+        switch (SettingsManager::Get().GetSettings().spacing) {
+        case SpacingPreset::TIGHT:
+          spacingMult = 1.15f;
+          break;
+        case SpacingPreset::NORMAL:
+          spacingMult = 1.35f;
+          break;
+        case SpacingPreset::LOOSE:
+          spacingMult = 1.6f;
+          break;
+        }
+        int stepY = (int)(baseHeight * spacingMult);
+
         for (int i = 0; i < linesPerPage && (currentLine + i) < totalLines;
              i++) {
           const LineInfo &li = chapterLines[currentLine + i];
@@ -727,24 +833,26 @@ int main(int argc, char *argv[]) {
           if (s == TextStyle::NORMAL) {
             if (isRotated)
               renderer.RenderTextWithKey(
-                  txt, key, SCREEN_WIDTH - (LAYOUT_START_Y + i * stepY),
-                  LAYOUT_MARGIN, 0xFFFFFFFF, s, 90.0f);
+                  txt, key, SCREEN_WIDTH - (layoutStartY + i * stepY),
+                  layoutMargin, themeColors.text, s, 90.0f);
             else
-              renderer.RenderTextWithKey(txt, key, LAYOUT_MARGIN,
-                                         LAYOUT_START_Y + i * stepY, 0xFFFFFFFF,
-                                         s, 0.0f);
+              renderer.RenderTextWithKey(txt, key, layoutMargin,
+                                         layoutStartY + i * stepY,
+                                         themeColors.text, s, 0.0f);
           } else {
             if (isRotated)
-              renderer.RenderTextCenteredWithKey(
-                  txt, key, (LAYOUT_START_Y + i * stepY), 0xFFFFFFFF, s, 90.0f);
+              renderer.RenderTextCenteredWithKey(txt, key,
+                                                 (layoutStartY + i * stepY),
+                                                 themeColors.heading, s, 90.0f);
             else
-              renderer.RenderTextCenteredWithKey(
-                  txt, key, LAYOUT_START_Y + i * stepY, 0xFFFFFFFF, s, 0.0f);
+              renderer.RenderTextCenteredWithKey(txt, key,
+                                                 layoutStartY + i * stepY,
+                                                 themeColors.heading, s, 0.0f);
           }
         }
       }
 
-      // Status Overlay (SELECT)
+      // Render Common Reader UI (Overlay & Counter)
       if (showStatusOverlay) {
         ScePspDateTime pspTime;
         sceRtcGetCurrentClockLocalTime(&pspTime);
@@ -758,19 +866,18 @@ int main(int argc, char *argv[]) {
         SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 180);
 
         if (isRotated) {
-          SDL_Rect bg = {445, 0, 35, 272};
-          SDL_RenderFillRect(sdlRenderer, &bg);
-          renderer.RenderText(statusBuf, 448, 10, 0xFFFFFFFF, TextStyle::SMALL,
-                              90.0f);
+          // SDL_Rect bg = {445, 0, 35, 272};
+          // SDL_RenderFillRect(sdlRenderer, &bg);
+          renderer.RenderText(statusBuf, 448, 10, themeColors.text,
+                              TextStyle::SMALL, 90.0f);
         } else {
-          SDL_Rect bg = {0, 0, 480, 25};
-          SDL_RenderFillRect(sdlRenderer, &bg);
-          renderer.RenderText(statusBuf, 10, 5, 0xFFFFFFFF, TextStyle::SMALL,
-                              0.0f);
+          // SDL_Rect bg = {0, 0, 480, 25};
+          // SDL_RenderFillRect(sdlRenderer, &bg);
+          renderer.RenderText(statusBuf, 10, 5, themeColors.text,
+                              TextStyle::SMALL, 0.0f);
         }
       }
 
-      // Page Counter (Minimalist: just the number)
       if (currentChapter >= 0 && !showChapterMenu) {
         char pageBuf[16];
         snprintf(pageBuf, sizeof(pageBuf), "%d", currentPageIdx + 1);
@@ -815,25 +922,180 @@ int main(int argc, char *argv[]) {
             }
           }
 
+          int textW = renderer.MeasureTextWidth(title, TextStyle::NORMAL);
+          int offset = 0;
+          bool clipped = false;
+
+          if (idx == menuSelection && textW > menuWidth) {
+            uint32_t ticks = SDL_GetTicks();
+            offset = (ticks / 20) % (textW + 60);
+            if (offset > textW + 20)
+              offset = -20;
+            if (offset < 0)
+              offset = 0;
+            clipped = true;
+          }
+
           if (isRotated) {
             int visualY = menuY + i * 18;
-            renderer.RenderText(title, 480 - visualY, menuX, color,
+            if (clipped) {
+              SDL_Rect clip = {480 - visualY - 22, menuX, 24, menuWidth};
+              SDL_RenderSetClipRect(sdlRenderer, &clip);
+            }
+            renderer.RenderText(title, 480 - visualY, menuX - offset, color,
                                 TextStyle::NORMAL, 90.0f);
+            if (clipped)
+              SDL_RenderSetClipRect(sdlRenderer, NULL);
           } else {
-            renderer.RenderText(title, menuX, menuY + i * 18, color,
+            if (clipped) {
+              SDL_Rect clip = {menuX, menuY + i * 18, menuWidth, 20};
+              SDL_RenderSetClipRect(sdlRenderer, &clip);
+            }
+            renderer.RenderText(title, menuX - offset, menuY + i * 18, color,
                                 TextStyle::NORMAL, 0.0f);
+            if (clipped)
+              SDL_RenderSetClipRect(sdlRenderer, NULL);
           }
         }
       }
-    }
+    } else if (currentState == STATE_SETTINGS) {
+      // --- SETTINGS LOGIC ---
+      // DebugLogger::Log("Trace: Inside STATE_SETTINGS logic");
+      if (input.UpPressed())
+        settingsSelection = std::max(0, settingsSelection - 1);
+      if (input.DownPressed())
+        settingsSelection = std::min(5, settingsSelection + 1);
 
+      if (input.LeftPressed() || input.RightPressed() || input.CrossPressed()) {
+        int dir = input.LeftPressed() ? -1 : 1;
+        // Cross always advances like Right
+        if (input.CrossPressed())
+          dir = 1;
+
+        AppSettings &s = SettingsManager::Get().GetSettings();
+        switch (settingsSelection) {
+        case 0: // Theme
+          s.theme = (Theme)(((int)s.theme + dir + 3) % 3);
+          renderer.SetTheme(s.theme);
+          break;
+        case 1: // Font Size
+        {
+          float f = s.fontScale + (0.2f * dir);
+          if (f > 3.0f)
+            f = 3.0f;
+          if (f < 0.6f)
+            f = 0.6f;
+          s.fontScale = f;
+          readerFontScale = f;
+          renderer.LoadFont(readerFontScale);
+          reflowLayout();
+        } break;
+        case 2: // Margins
+          s.margin = (MarginPreset)(((int)s.margin + dir + 3) % 3);
+          switch (s.margin) {
+          case MarginPreset::NARROW:
+            layoutMargin = 10;
+            break;
+          case MarginPreset::NORMAL:
+            layoutMargin = 24;
+            break;
+          case MarginPreset::WIDE:
+            layoutMargin = 40;
+            break;
+          }
+          reflowLayout();
+          break;
+        case 3: // Spacing
+          s.spacing = (SpacingPreset)(((int)s.spacing + dir + 3) % 3);
+          reflowLayout();
+          break;
+        case 4: // Status Overlay
+          s.showStatus = !s.showStatus;
+          showStatusOverlay = s.showStatus;
+          break;
+        case 5: // Back to Library
+          if (input.CrossPressed() || input.CirclePressed() ||
+              input.RightPressed()) {
+            currentState = STATE_LIBRARY;
+            renderer.SetFontMode(FontMode::SMART);
+            renderer.LoadFont(1.0f);
+            spaceWidthsDirty = true;
+            renderer.ClearCache();
+          }
+          break;
+        }
+      }
+
+      // --- SETTINGS RENDER ---
+      // DebugLogger::Log("Trace: Rendering Settings Menu");
+      const ThemeColors &tc = renderer.GetThemeColors();
+      SDL_SetRenderDrawColor(sdlRenderer, (tc.background >> 0) & 0xFF,
+                             (tc.background >> 8) & 0xFF,
+                             (tc.background >> 16) & 0xFF, 255);
+      SDL_RenderClear(sdlRenderer);
+
+      // renderer.RenderTextCentered("SETTINGS", 20, tc.heading, TextStyle::H1);
+
+      const char *options[] = {"Theme",       "Font Size",
+                               "Margins",     "Line Spacing",
+                               "Show Status", "Back to Library"};
+      char valBuf[64];
+      AppSettings &s = SettingsManager::Get().GetSettings();
+
+      for (int i = 0; i < 6; i++) {
+        uint32_t color = (i == settingsSelection) ? tc.selection : tc.text;
+        renderer.RenderText(options[i], 60, 60 + i * 25, color,
+                            TextStyle::NORMAL);
+
+        valBuf[0] = '\0';
+        if (i == 0)
+          snprintf(valBuf, 64, ": \u25C0 %s \u25BA",
+                   s.theme == Theme::NIGHT
+                       ? "Night"
+                       : (s.theme == Theme::SEPIA ? "Sepia" : "Light"));
+        if (i == 1)
+          snprintf(valBuf, 64, ": \u25C0 %.1fx \u25BA", s.fontScale);
+        if (i == 2)
+          snprintf(
+              valBuf, 64, ": \u25C0 %s \u25BA",
+              s.margin == MarginPreset::NARROW
+                  ? "Narrow"
+                  : (s.margin == MarginPreset::NORMAL ? "Normal" : "Wide"));
+        if (i == 3)
+          snprintf(
+              valBuf, 64, ": \u25C0 %s \u25BA",
+              s.spacing == SpacingPreset::TIGHT
+                  ? "Tight"
+                  : (s.spacing == SpacingPreset::NORMAL ? "Normal" : "Loose"));
+        if (i == 4)
+          snprintf(valBuf, 64, ": \u25C0 %s \u25BA",
+                   s.showStatus ? "ON" : "OFF");
+
+        if (valBuf[0] != '\0') {
+          renderer.RenderText(valBuf, 220, 60 + i * 25, color,
+                              TextStyle::NORMAL);
+        }
+        // DebugLogger::Log("Trace: Rendered option %d", i);
+      } // End for loop
+
+      renderer.RenderTextCentered("Press SELECT to return to book", 240,
+                                  tc.dimmed, TextStyle::SMALL);
+      // End STATE_SETTINGS
+
+    } // End if/else if chain
+
+    // --- COMMON PER-FRAME OUTPUT ---
+    // Make sure we always present, regardless of state
     SDL_RenderPresent(sdlRenderer);
     sceDisplayWaitVblankStart();
     SDL_Delay(1);
-  }
 
+  } // End while(running)
+
+  DebugLogger::Log("App exiting, shutting down systems...");
   renderer.Shutdown();
   reader.Close();
+  SettingsManager::Get().Save();
   if (joy)
     SDL_JoystickClose(joy);
   SDL_Quit();

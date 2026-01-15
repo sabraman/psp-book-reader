@@ -15,11 +15,17 @@ void DebugLogger::Log(const char *format, ...) {
   if (!logFile)
     return;
 
-  va_list args;
+  va_list args, args2;
   va_start(args, format);
+  va_copy(args2, args);
   vfprintf(logFile, format, args);
+  vprintf(format, args2);
+  printf("\n");
+  va_end(args2);
   va_end(args);
   fprintf(logFile, "\n");
+  fflush(logFile);
+  fflush(stdout);
 }
 
 void DebugLogger::Close() {

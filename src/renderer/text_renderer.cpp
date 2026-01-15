@@ -294,3 +294,32 @@ int TextRenderer::GetLineHeight(TextStyle style) {
     return 0;
   return TTF_FontHeight(font);
 }
+void TextRenderer::SetTheme(Theme theme) {
+  switch (theme) {
+  case Theme::SEPIA:
+    themeColors = ThemeColors(0xFFCCE8FF, // Background: Cream/Sepia
+                              0xFF202050, // Text: Dark Brown
+                              0xFF101030, // Heading: Deep Brown
+                              0xFF606090, // Dimmed
+                              0xFF8080C0  // Selection
+    );
+    break;
+  case Theme::LIGHT:
+    themeColors = ThemeColors(0xFFFFFFFF, // Background: White
+                              0xFF202020, // Text: Near Black
+                              0xFF000000, // Heading: Black
+                              0xFF808080, // Dimmed
+                              0xFFDDDDDD  // Selection
+    );
+    break;
+  case Theme::NIGHT:
+  default:
+    themeColors = ThemeColors(0xFF000000, // Background: Black
+                              0xFFDDDDDD, // Text: Light Gray
+                              0xFFFFFFFF, // Heading: White
+                              0xFF888888, // Dimmed
+                              0xFF00C8FF  // Selection: Cyan
+    );
+    break;
+  }
+}

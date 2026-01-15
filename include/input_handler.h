@@ -19,6 +19,7 @@ public:
   bool UpPressed();
   bool DownPressed();
   bool CrossPressed();
+  bool StartPressed();
   bool LTriggerPressed();
   bool RTriggerPressed();
   bool LeftPressed();
