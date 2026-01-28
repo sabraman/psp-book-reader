@@ -45,33 +45,47 @@ The project requires the following libraries in the PSP toolchain:
 ### Building
 
 1.  Configure the **PSPdev** toolchain.
-2.  Install dependencies via the toolchain package manager.
+2.  Install dependencies via the toolchain package manager (e.g., `psp-pacman`).
 3.  Execute `make` in the repository root.
 
 The resulting `EBOOT.PBP` will be located in the root directory.
 
-## Technical Implementation Details
+## Technical Implementation Details ("Development Hacks")
+
+Developing a modern reader for hardware with 32MB of RAM required several specific architectural optimizations and workarounds.
 
 ### 1. Dynamic Power Management (DFS)
 To maximize battery life, the application implements event-driven frequency scaling:
--   **Performance Mode (333MHz/166MHz)**: Active during library scans or intensive layout operations.
--   **Balanced Mode (222MHz/111MHz)**: Standard operating frequency during UI interaction.
--   **Saving Mode (66MHz/33MHz)**: Activated after 2 seconds of user inactivity. 
--   **Frame Throttling**: The main loop reduces the poll frequency when idle, significantly lowering CPU utilization during passive reading.
+-   **Automated Scaling**: The CPU drops to **66MHz** after 2 seconds of inactivity, scaling back to **222MHz** for UI interaction and **333MHz** for intensive tasks like library scanning.
+-   **Frame Throttling**: The main loop reduces poll frequency when idle, significantly lowering CPU utilization during passive reading while maintaining responsiveness to any button press.
 
-### 2. HTML Processing
-The reader utilizes a state-machine based HTML extractor rather than a full DOM parser to reduce memory footprint and increase processing speed for large chapters. It filters out irrelevant tags and styles while maintaining document structure.
+### 2. State-Machine Based HTML Extraction
+Traditional DOM parsers are too resource-intensive for the PSP. The reader uses a custom state-machine parser to extract text from EPUB chapters.
+-   **Filtering**: It explicitly ignores `<script>` and `<style>` blocks and treats block-level tags as newline generators.
+-   **Performance**: This allows for near-instant rendering of large chapters with minimal memory allocation.
 
-### 3. Memory Management
-EPUB archives are processed in memory using a streaming approach. Only the active chapter is extracted at any time, allowing the application to handle documents significantly larger than the PSP's available RAM (32MB/64MB).
+### 3. Memory-Efficient Archive Handling
+EPUBs are ZIP archives. We use `miniz` to extract only the current chapter into the heap.
+-   **Memory Barrier**: To prevent fragmentation and exhaustion on 32MB hardware, the previous chapter's buffer is explicitly freed *immediately* before the new one is allocated.
+-   **Result**: The application can handle documents larger than 50MB by never holding the entire decompressed book in memory.
 
-### 4. Layout Engine
-The layout engine uses a metrics-based approach with O(1) word width lookups. Reading positions are tracked via anchors to maintain consistency across orientation changes or font size adjustments.
+### 4. TATE Mode Implementation
+The PSP's 480x272 screen is optimized for horizontal use, which is cramped for reading.
+-   **Rotation**: Text is rendered to textures as normal and then displayed using `SDL_RenderCopyEx` with a 90-degree rotation.
+-   **Input Remapping**: The D-Pad coordinate system is swapped when in TATE mode (e.g., "Up" scrolls "Left") to keep navigation intuitive.
 
-### 5. Caching Systems
--   **Metadata Caches**: Indexing results are stored in `library.cache`.
--   **Render Caches**: Text lines are stored in an LRU texture cache using FNV-1a hashes to avoid redundant rendering operations.
--   **Lazy Loading**: UI assets and book covers are loaded on-demand and evicted when no longer in the viewport.
+### 5. O(N) Layout Arithmetic
+The reader avoids expensive re-measuring of text by caching word metrics.
+-   **Metric Caching**: Word widths for each font scale are pre-calculated. This transforms line breaking into a simple arithmetic operation rather than a repeated rendering task.
+-   **Anchor Points**: Reading positions are tracked via anchors (the first word on screen). When font sizes change or the screen rotates, the engine recalculates the layout and scrolls to ensure the anchor word remains visible.
+
+### 6. Caching and Rendering 
+-   **LRU Texture Cache**: Rendered text lines are stored in a Least Recently Used (LRU) cache.
+-   **FNV-1a Hashing**: Text lines are hashed once during layout. The render loop uses these hashes to skip redundant string operations on every frame.
+-   **Zero-Overhead Font Switching**: The book's language is detected from metadata. The renderer then locks to a specific font (e.g., `Droid Sans Fallback` for CJK or `Inter` for Latin) to avoid per-character font checks during the critical render path.
+
+### 7. Lazy Asset Management
+To prevent VRAM exhaustion, UI assets like book cover thumbnails are managed lazily. Only items within the immediate viewport are loaded into memory; textures are destroyed as they move out of scope.
 
 ## Contribution
 
