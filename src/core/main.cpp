@@ -391,7 +391,6 @@ int main(int argc, char *argv[]) {
   int settingsSelection = 0;
 
   while (running) {
-    DebugLogger::Log("--- Frame %u Start ---", frameCount);
     frameCount++;
     input.Update();
     const auto &books = library.GetBooks();
@@ -561,11 +560,9 @@ int main(int argc, char *argv[]) {
             }
           }
         }
-        DebugLogger::Log("Thumbnails loop finished");
 
         for (int i = 0; i < 4 && (scrollOffset + i) < (int)books.size(); i++) {
           int idx = scrollOffset + i;
-          DebugLogger::Log("Rendering book index: %d", idx);
           const auto &book = books[idx];
           int bx = startX + i * spacing;
           int by = 50;
@@ -960,7 +957,6 @@ int main(int argc, char *argv[]) {
       }
     } else if (currentState == STATE_SETTINGS) {
       // --- SETTINGS LOGIC ---
-      // DebugLogger::Log("Trace: Inside STATE_SETTINGS logic");
       if (input.UpPressed())
         settingsSelection = std::max(0, settingsSelection - 1);
       if (input.DownPressed())
@@ -1027,7 +1023,6 @@ int main(int argc, char *argv[]) {
       }
 
       // --- SETTINGS RENDER ---
-      // DebugLogger::Log("Trace: Rendering Settings Menu");
       const ThemeColors &tc = renderer.GetThemeColors();
       SDL_SetRenderDrawColor(sdlRenderer, (tc.background >> 0) & 0xFF,
                              (tc.background >> 8) & 0xFF,
@@ -1075,7 +1070,6 @@ int main(int argc, char *argv[]) {
           renderer.RenderText(valBuf, 220, 60 + i * 25, color,
                               TextStyle::NORMAL);
         }
-        // DebugLogger::Log("Trace: Rendered option %d", i);
       } // End for loop
 
       renderer.RenderTextCentered("Press SELECT to return to book", 240,

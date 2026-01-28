@@ -82,7 +82,7 @@ bool LibraryManager::ScanDirectory(const std::string &path) {
 
           cacheMap[fullPath] = {book.title, book.author};
           cacheDirty = true;
-          DebugLogger::Log("Library found (new): %s", book.title.c_str());
+          // DebugLogger::Log("Library found (new): %s", book.title.c_str());
         } else {
           // Fallback: Add file even if parsing fails (so it shows up)
           DebugLogger::Log("Failed to parse EPUB: %s. Adding fallback.",
@@ -111,7 +111,7 @@ bool LibraryManager::ScanDirectory(const std::string &path) {
                 << "\n";
       }
       outFile.close();
-      DebugLogger::Log("Library cache updated: %s", cachePath.c_str());
+      // DebugLogger::Log("Library cache updated: %s", cachePath.c_str());
     }
   }
 
@@ -122,7 +122,8 @@ void LibraryManager::LoadThumbnail(SDL_Renderer *renderer, int index) {
   if (index < 0 || index >= (int)books.size() || books[index].thumbnail)
     return;
 
-  DebugLogger::Log("Loading thumbnail for: %s", books[index].filename.c_str());
+  // DebugLogger::Log("Loading thumbnail for: %s",
+  // books[index].filename.c_str());
   EpubReader reader;
   if (reader.Open(books[index].filename.c_str())) {
     books[index].thumbnail = CreateThumbnail(renderer, reader);
@@ -162,7 +163,7 @@ SDL_Texture *LibraryManager::CreateThumbnail(SDL_Renderer *renderer,
     free(data);
     return nullptr;
   }
-  DebugLogger::Log("CreateThumbnail: Loading image...");
+  // DebugLogger::Log("CreateThumbnail: Loading image...");
   SDL_Surface *surface = IMG_Load_RW(rw, 1);
   free(data);
 
@@ -170,7 +171,7 @@ SDL_Texture *LibraryManager::CreateThumbnail(SDL_Renderer *renderer,
     DebugLogger::Log("IMG_Load_RW error: %s", IMG_GetError());
     return nullptr;
   }
-  DebugLogger::Log("CreateThumbnail: Decoded %dx%d", surface->w, surface->h);
+  // DebugLogger::Log("CreateThumbnail: Decoded %dx%d", surface->w, surface->h);
 
   // Target thumb size: ~100x150
   int tw = 100;
@@ -179,7 +180,7 @@ SDL_Texture *LibraryManager::CreateThumbnail(SDL_Renderer *renderer,
   int finalW = (int)(surface->w * scale);
   int finalH = (int)(surface->h * scale);
 
-  DebugLogger::Log("CreateThumbnail: Scaling to %dx%d", finalW, finalH);
+  // DebugLogger::Log("CreateThumbnail: Scaling to %dx%d", finalW, finalH);
   SDL_Surface *scaled = SDL_CreateRGBSurface(0, finalW, finalH, 32, 0, 0, 0, 0);
   if (!scaled) {
     DebugLogger::Log("SDL_CreateRGBSurface FAILED!");
@@ -189,12 +190,12 @@ SDL_Texture *LibraryManager::CreateThumbnail(SDL_Renderer *renderer,
   SDL_BlitScaled(surface, nullptr, scaled, nullptr);
   SDL_FreeSurface(surface);
 
-  DebugLogger::Log("CreateThumbnail: Creating texture...");
+  // DebugLogger::Log("CreateThumbnail: Creating texture...");
   SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, scaled);
   SDL_FreeSurface(scaled);
 
   if (tex) {
-    DebugLogger::Log("CreateThumbnail: SUCCESS");
+    // DebugLogger::Log("CreateThumbnail: SUCCESS");
   } else {
     DebugLogger::Log("SDL_CreateTextureFromSurface FAILED!");
   }
