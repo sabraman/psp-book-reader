@@ -4,9 +4,13 @@
 #include "html_text_extractor.h"
 #include "input_handler.h"
 #include "library_manager.h"
+#include "power_utils.h"
 #include "settings_manager.h"
 #include "text_renderer.h"
 #include <SDL2/SDL.h>
+
+static uint32_t lastInputTicks = 0;
+static PowerMode currentPowerMode = POWER_MODE_BALANCED;
 #include <SDL2/SDL_image.h>
 #include <algorithm>
 #include <cmath>
@@ -393,11 +397,39 @@ int main(int argc, char *argv[]) {
   while (running) {
     frameCount++;
     input.Update();
+
+    // --- Power Management Logic ---
+    PowerMode targetMode = POWER_MODE_BALANCED;
+    bool isIdle = (SDL_GetTicks() - lastInputTicks > 2000);
+
+    if (isScanning) {
+      targetMode = POWER_MODE_PERFORMANCE;
+    } else if (isIdle) {
+      targetMode = POWER_MODE_SAVING;
+    }
+
+    if (targetMode != currentPowerMode) {
+      SetPowerMode(targetMode);
+      currentPowerMode = targetMode;
+      DebugLogger::Log("PowerMode changed: %d", (int)targetMode);
+    }
+
+    // --- Frame Throttling ---
+    if (currentPowerMode == POWER_MODE_SAVING) {
+      SDL_Delay(32); // ~30 FPS or less wakeups
+    } else {
+      SDL_Delay(1); // Standard yielding
+    }
     const auto &books = library.GetBooks();
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_QUIT)
         running = 0;
       input.ProcessEvent(event);
+      lastInputTicks = SDL_GetTicks(); // Activity detected
+    }
+
+    if (input.HasActiveInput()) {
+      lastInputTicks = SDL_GetTicks(); // Continuous activity
     }
     if (input.StartPressed()) {
       if (currentState == STATE_READER) {

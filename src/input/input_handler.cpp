@@ -12,6 +12,8 @@ void InputHandler::Update() {
   pressedButtons = 0; // Clear latches for the new frame
 }
 
+bool InputHandler::HasActiveInput() const { return currentButtons != 0; }
+
 void InputHandler::ProcessEvent(SDL_Event &event) {
   uint32_t bit = 0;
   bool down = false;

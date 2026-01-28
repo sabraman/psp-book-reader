@@ -9,6 +9,7 @@ public:
 
   void Update();
   void ProcessEvent(SDL_Event &event);
+  bool HasActiveInput() const;
 
   bool NextPage();
   bool PrevPage();

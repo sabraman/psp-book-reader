@@ -24,6 +24,8 @@ void DebugLogger::Log(const char *format, ...) {
   va_end(args2);
   va_end(args);
   fprintf(logFile, "\n");
+  // Removed: fflush(logFile);
+  // Removed: fflush(stdout);
 }
 
 void DebugLogger::Close() {
