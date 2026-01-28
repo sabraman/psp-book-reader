@@ -59,33 +59,26 @@ To maximize battery life, the application implements event-driven frequency scal
 -   **Automated Scaling**: The CPU drops to **66MHz** after 2 seconds of inactivity, scaling back to **222MHz** for UI interaction and **333MHz** for intensive tasks like library scanning.
 -   **Frame Throttling**: The main loop reduces poll frequency when idle, significantly lowering CPU utilization during passive reading while maintaining responsiveness to any button press.
 
-### 2. State-Machine Based HTML Extraction
-Traditional DOM parsers are too resource-intensive for the PSP. The reader uses a custom state-machine parser to extract text from EPUB chapters.
--   **Filtering**: It explicitly ignores `<script>` and `<style>` blocks and treats block-level tags as newline generators.
--   **Performance**: This allows for near-instant rendering of large chapters with minimal memory allocation.
+### 2. Memory Safety Guards
+On the PSP-1000, 32MB of RAM is extremely restrictive.
+-   **Cover Guard**: The `EpubReader` explicitly rejects any book cover larger than 2MB uncompressed. This prevents "OOM" (Out of Memory) crashes caused by high-resolution images.
+-   **Lazy Viewport Management**: UI assets and cover textures are only loaded when they enter the immediate viewport and are destroyed as soon as they scroll out of scope.
 
-### 3. Memory-Efficient Archive Handling
-EPUBs are ZIP archives. We use `miniz` to extract only the current chapter into the heap.
--   **Memory Barrier**: To prevent fragmentation and exhaustion on 32MB hardware, the previous chapter's buffer is explicitly freed *immediately* before the new one is allocated.
--   **Result**: The application can handle documents larger than 50MB by never holding the entire decompressed book in memory.
+### 3. ZIP-to-Memory Extraction
+To avoid the overhead of temporary files on the slow Memory Stick I/O:
+-   **RWops Integration**: We use `miniz` to extract image data directly to a heap buffer, then use `SDL_RWFromMem` to feed it directly into the `SDL2_image` decoder. This bypasses the disk entirely after the initial library scan.
+-   **Streaming Chapter Buffers**: Only the active chapter is held in memory. The layout engine uses pre-calculated spine metadata (sizes/offsets) to allocate exactly the required buffer size before decompression.
 
-### 4. TATE Mode Implementation
-The PSP's 480x272 screen is optimized for horizontal use, which is cramped for reading.
--   **Rotation**: Text is rendered to textures as normal and then displayed using `SDL_RenderCopyEx` with a 90-degree rotation.
--   **Input Remapping**: The D-Pad coordinate system is swapped when in TATE mode (e.g., "Up" scrolls "Left") to keep navigation intuitive.
+### 4. Optimized Font Pipeline
+`SDL2_ttf` rendering is CPU-bound and slow on the PSP's specialized architecture.
+-   **Dual-Tier Caching**:
+    -   **Texture Cache (LRU)**: Rendered text lines are stored as hardware-accelerated textures.
+    -   **Metrics Cache**: Theoretical widths of all text segments are cached using FNV-1a hashes. This makes the wrap-around layout engine an O(N) arithmetic task rather than a measurement-heavy one.
+-   **Zero-Check CJK Fallback**: We detect the book language from OPF metadata and switch the primary font at the renderer level. This avoids expensive per-character Unicode block checks during the 60FPS render loop.
 
-### 5. O(N) Layout Arithmetic
-The reader avoids expensive re-measuring of text by caching word metrics.
--   **Metric Caching**: Word widths for each font scale are pre-calculated. This transforms line breaking into a simple arithmetic operation rather than a repeated rendering task.
--   **Anchor Points**: Reading positions are tracked via anchors (the first word on screen). When font sizes change or the screen rotates, the engine recalculates the layout and scrolls to ensure the anchor word remains visible.
-
-### 6. Caching and Rendering 
--   **LRU Texture Cache**: Rendered text lines are stored in a Least Recently Used (LRU) cache.
--   **FNV-1a Hashing**: Text lines are hashed once during layout. The render loop uses these hashes to skip redundant string operations on every frame.
--   **Zero-Overhead Font Switching**: The book's language is detected from metadata. The renderer then locks to a specific font (e.g., `Droid Sans Fallback` for CJK or `Inter` for Latin) to avoid per-character font checks during the critical render path.
-
-### 7. Lazy Asset Management
-To prevent VRAM exhaustion, UI assets like book cover thumbnails are managed lazily. Only items within the immediate viewport are loaded into memory; textures are destroyed as they move out of scope.
+### 5. Render Loop Optimizations
+-   **Keyed Line Rendering**: Layout positions and text line hashes are cached. The main loop only re-sets texture color/alpha modulators when themes change, rather than re-calculating drawing targets.
+-   **TATE Mode Coordinates**: Screen rotation is achieved via `SDL_RenderCopyEx` at 90 degrees. To maintain intuitive controls, the input handler uses a specialized remap matrix for the D-Pad and Analog stick axes.
 
 ## Contribution
 
