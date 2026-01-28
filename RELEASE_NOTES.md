@@ -1,21 +1,14 @@
-# Release v1.1.0: The "Clean & Polish" Update 🧹✨
+# Release v1.8.0: The "Stable I/O" Update 🛡️💾
 
-This release focuses on significant codebase cleanup, documentation improvements, and build optimization. No functional changes to the reader itself, but the project structure is now much lighter and more professional.
+This release addresses significant I/O issues that were causing high-frequency disk activity and system freezes.
 
 ## 🚀 Changes
 
-### 🧹 Project Cleanup
--   **Removed ~4000 lines of unused code**: Deleted the `libintrafont` library which was included but never actually used.
--   **Optimized Assets**: Removed ~13MB of unused font variations. The app now efficiently uses a single `Inter-Regular.ttf`.
--   **Root Directory**: Cleared clutter files (`inter.zip`, debug logs, temporary build files).
+### ⚡ Optimization & Stability
+-   **Fixed Issue #5**: Resolved excessive I/O activity caused by per-frame logging (60Hz).
+-   **Logger Optimization**: Removed frequent disk flushes from the debug logger to ensure smoother performance on PSP storage media.
+-   **Reduced Log Noise**: Disabled verbose trace logs during library operations and settings navigation.
 
-### 📖 Documentation
--   **New README**: completely rewrote `README.md` with:
-    -   Accurate dependency list (SDL2, pugixml, miniz).
-    -   "How We Made This" section detailing technical hacks (custom HTML stripper, texture rotation).
-    -   Clear contribution guidelines.
-    -   Correct build instructions.
-
-### 🛠 Build System
--   **Makefile**: Removed unused linker flags (`-lpspnet`, `-lpspnet_apctl`).
--   Note: `-lbz2` is retained as a transitive dependency for `libfreetype`.
+### 🛠 Improvements
+-   **System Stability**: Reduced I/O bus saturation, preventing the application from freezing during exit or long sessions.
+-   **Log Size Management**: The `debug.log` file no longer grows to excessive sizes during normal use.
