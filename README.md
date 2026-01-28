@@ -62,29 +62,30 @@ To maximize battery life, the application implements event-driven frequency scal
 ### 2. The CJK Tokenizer Hack
 Without a heavy dictionary-based tokenizer, supporting CJK line-breaking is difficult.
 -   **Byte-Level Detection**: The extractor identifies 3-byte UTF-8 sequences (typical for CJK ideographs) and treats each as a standalone "word."
--   **Arithmetic Wrapping**: This allows the standard whitespace-based layout engine to wrap CJK text correctly without needing dedicated script-aware logic.
+-   **Arithmetic Wrapping**: This allows the standard whitespace-based layout engine to wrap CJK text correctly without dedicated script-aware logic.
 
 ### 3. Adaptive Incremental Layout
 To prevent UI stutter upon loading large book chapters, we avoid blocking the main thread.
--   **Frame Throttling**: The layout engine processes 500 words per frame. This budget is dynamically doubled to 1000 words if the user is actively waiting (e.g., pressing "Next Page").
--   **Position Anchors**: Reading positions are tracked via word indices ("Anchors"). When the user changes font size or rotates the screen, the engine reflows the text and instantly scrolls to maintain the exact word position.
+-   **Frame Throttling**: The layout engine processes 500 words per frame. This budget is dynamically doubled if the user is actively waiting (e.g., pressing "Next Page").
+-   **Position Anchors**: Reading positions are tracked via word indices. When the user changes font size or rotates the screen, the engine reflows the text and instantly scrolls to maintain the exact word position.
 
-### 4. Fast Library Scanning
-Parsing dozens of EPUB files (ZIP/XML) on every launch is too slow for handheld use.
--   **Metadata Caching**: The application maintains a `library.cache` file. On boot, the scanner performs a fast directory listing and only opens EPUBs that are not already present in the cache.
+### 4. Hardware-Specific Memory Guards
+On the PSP-1000, 32MB of RAM is extremely restrictive.
+-   **Cover Guard**: Uncompressed images are limited to 2MB. Larger covers are rejected to prevent OOM (Out of Memory) crashes.
+-   **GE Texture Limit**: The PSP Graphics Engine has a 512x512 texture size limit. The app detects oversized covers and re-samples them locally to stay within hardware bounds.
 
-### 5. Memory Safety & I/O Optimization
--   **Cover Guard**: To prevent crashes on the PSP-1000, uncompressed images are limited to 2MB. Larger covers are automatically rejected.
--   **RWops Extraction**: Data is decompressed via `miniz` directly to memory and fed to SDL via `SDL_RWFromMem`. This bypasses the slow Memory Stick I/O for all image decoding.
--   **Lazy Viewport Management**: UI textures are loaded only when items enter the viewport and are evicted immediately when scrolled out of scope.
+### 5. Disk I/O & Serialization Hacks
+-   **RWops Buffering**: Data is decompressed via `miniz` directly to memory and fed to SDL via `SDL_RWFromMem`. This bypasses the slow Memory Stick I/O for all image decoding.
+-   **Zero-Overhead Serialization**: App settings and reading progress are stored as a raw binary dump of the struct (`config.bin`). This is significantly faster than JSON/XML parsing on handheld hardware.
+-   **Metadata Caching**: A `library.cache` file stores book info, avoiding expensive ZIP/XML parsing on every launch.
 
-### 6. Layout Hygiene & Caching
--   **Redundant Metadata Filtering**: Some EPUBs repeat the book title or author at the start of every chapter. The reader uses an insensitive heuristic check to detect and strip this noise.
--   **FNV-1a Metric Hashing**: Theoretical word widths and rendered textures are stored in independent LRU caches. Composite keys (String + Style + FontMode) are hashed once to ensure O(1) retrieval.
+### 6. Optimized Font Pipeline
+-   **Dual-Tier Caching**: Uses a combined hardware texture cache and a theoretical metrics cache (FNV-1a hashed) to make layout an O(N) arithmetic task.
+-   **Zero-Check Font Switching**: Detects book language from OPF metadata and locks the renderer to a specific font (Droid Sans Fallback vs Inter) to avoid per-character Unicode checks during the render loop.
 
-### 7. Coordinate Remap Engine
--   **TATE Mode Logic**: While `SDL_RenderCopyEx` handles the 90-degree visual rotation, we use a custom translation matrix for the D-Pad and Analog stick axes to ensure controls remain intuitive in vertical mode.
--   **Input Event Latching**: Atomic state transitions in the input handler prevent "double-triggering" across multiple logical states in a single frame.
+### 7. TATE Coordinate Engine
+-   **Input Remapping**: While `SDL_RenderCopyEx` handles the visual 90-degree rotation, the input handler uses a specialized remap matrix for the D-Pad and Analog axes to keep navigation intuitive.
+-   **Event Latching**: Atomic state transitions in the input handler prevent "double-triggering" across multiple logical states in a single frame.
 
 ## Contribution
 
