@@ -1,6 +1,8 @@
 # PSP-BookReader
 
-A C++/SDL2 EPUB reader for the Sony PlayStation Portable (PSP).
+Turn a Sony PSP into a dedicated EPUB reader.
+
+PSP-BookReader is a C++/SDL2 homebrew app for reading EPUB books on real PSP hardware, with cover art, persistent progress, theme controls, TATE rotation, and careful optimization for the PSP's memory and battery limits.
 
 ![PSP-BookReader Library View](thumbnail.png)
 
@@ -16,6 +18,21 @@ A C++/SDL2 EPUB reader for the Sony PlayStation Portable (PSP).
 -   **System Integration**: Real-time clock and battery percentage monitoring.
 -   **Wide Character Support**: Conditional font switching for CJK (Chinese, Japanese, Korean) and Latin/Cyrillic scripts.
 -   **Power Management**: Dynamic frequency scaling and inactivity-based frame throttling.
+
+## Why It Stands Out
+
+-   **Built for real PSP constraints**: Designed around 32MB RAM limits, texture caps, and Memory Stick I/O bottlenecks.
+-   **Actually pleasant to read on**: Themes, font scaling, margin controls, chapter navigation, and progress persistence make it feel like a reader instead of a tech demo.
+-   **Hardware-aware battery savings**: Dynamic CPU scaling and idle throttling reduce power draw during long reading sessions.
+-   **Unusual but useful device reuse**: It gives old PSP hardware a calm, practical second life as a pocket ebook reader.
+
+## Quick Start
+
+1.  Download the latest packaged release from the [GitHub Releases page](https://github.com/sabraman/psp-book-reader/releases/latest), or build it yourself with the PSP toolchain.
+2.  Copy the app folder containing `EBOOT.PBP` to `PSP/GAME/` on your Memory Stick.
+3.  Keep the bundled `fonts/` assets alongside the app files.
+4.  Place your `.epub` files where the app can index them.
+5.  Launch the app from the PSP Game menu.
 
 ## Controls
 
@@ -86,6 +103,19 @@ On the PSP-1000, 32MB of RAM is extremely restrictive.
 ### 7. TATE Coordinate Engine
 -   **Input Remapping**: While `SDL_RenderCopyEx` handles the visual 90-degree rotation, the input handler uses a specialized remap matrix for the D-Pad and Analog axes to keep navigation intuitive.
 -   **Event Latching**: Atomic state transitions in the input handler prevent "double-triggering" across multiple logical states in a single frame.
+
+## Promotion Notes
+
+This project tends to resonate with:
+
+-   PSP homebrew and retro handheld communities
+-   EPUB and ebook tooling communities
+-   People who enjoy repurposing older hardware
+-   Developers interested in optimization on constrained devices
+
+If you share it publicly, lead with the core hook: a real EPUB reader running on original PSP hardware, not just an emulator demo.
+
+For launch copy and channel planning, see [LAUNCH_COPY.md](/Users/sabraman/sandbox/pspepub/LAUNCH_COPY.md) and [PROMOTION_PLAN.md](/Users/sabraman/sandbox/pspepub/PROMOTION_PLAN.md).
 
 ## Contribution
 

@@ -2,6 +2,13 @@
 
 This release introduces dynamic power management to significantly extend PSP battery life during reading sessions.
 
+## Install
+
+1. Download `PSP-BookReader-v1.9.0.zip` from the release assets.
+2. Copy the included `PSP-BookReader` folder to `PSP/GAME/` on your Memory Stick.
+3. Keep the bundled `fonts/` directory next to `EBOOT.PBP`.
+4. Launch the app from the PSP Game menu.
+
 ## 🚀 Changes
 
 ### 🔋 Battery Optimization
