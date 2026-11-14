@@ -104,19 +104,6 @@ On the PSP-1000, 32MB of RAM is extremely restrictive.
 -   **Input Remapping**: While `SDL_RenderCopyEx` handles the visual 90-degree rotation, the input handler uses a specialized remap matrix for the D-Pad and Analog axes to keep navigation intuitive.
 -   **Event Latching**: Atomic state transitions in the input handler prevent "double-triggering" across multiple logical states in a single frame.
 
-## Promotion Notes
-
-This project tends to resonate with:
-
--   PSP homebrew and retro handheld communities
--   EPUB and ebook tooling communities
--   People who enjoy repurposing older hardware
--   Developers interested in optimization on constrained devices
-
-If you share it publicly, lead with the core hook: a real EPUB reader running on original PSP hardware, not just an emulator demo.
-
-For launch copy and channel planning, see [LAUNCH_COPY.md](/Users/sabraman/sandbox/pspepub/LAUNCH_COPY.md) and [PROMOTION_PLAN.md](/Users/sabraman/sandbox/pspepub/PROMOTION_PLAN.md).
-
 ## Contribution
 
 Technical contributions are welcome via Pull Requests.
