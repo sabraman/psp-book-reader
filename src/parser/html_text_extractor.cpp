@@ -4,6 +4,40 @@
 #include <cstring>
 #include <strings.h>
 
+namespace {
+  // 's' points just after "</".
+  // Returns `true` if the tag name equals `name` (case-insensitive)
+  // and ends at '>', '/', whitespace or end of string.
+  bool ClosingTagIs(const char *s, const char *name) {
+    size_t n = strlen(name);
+    if (strncasecmp(s, name, n) != 0)
+      return false;
+    char e = s[n];
+    return e == '>' || e == '/' || e == '\0' || isspace((unsigned char)e);
+  }
+
+  bool IsHeading(const char *name) {
+    return name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && name[2] == '\0';
+  }
+
+  bool IsBlockTag(const char *name) {
+    static const char *kBlock[] = {
+        "p",      "div",  "li",    "ul",    "ol",        "dl",
+        "dt",     "dd",   "tr",    "table", "caption",   "section",
+        "article","aside","header","footer","nav",       "blockquote",
+        "pre",    "hr",   "hgroup","figure","figcaption","address",
+        "body"
+    };
+
+    for (const char *b : kBlock)
+      if (strcmp(name, b) == 0)
+        return true;
+
+    return false;
+  }
+
+} // namespace
+
 HtmlTextExtractor::HtmlTextExtractor() {}
 
 HtmlTextExtractor::~HtmlTextExtractor() {}
@@ -22,10 +56,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
 
   int wordCount = 0;
   int bufferPos = 0;
-  bool inTag = false;
-  bool inScript = false;
-  bool inStyle = false;
   TextStyle currentStyle = TextStyle::NORMAL;
+
+  // When non-null we are inside <script> or <style>: everything is
+  // ignored until the matching closing tag.
+  const char *skipElem = nullptr;
 
   char currentWord[256];
   int currentWordLen = 0;
@@ -45,7 +80,13 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
     }
   };
 
-  auto pushNewline = [&]() {
+  // force == false: skipped at the very start and if the previous word is
+  // already a newline (so nested blocks / </p><p> give one break, not many).
+  // force == true (<br>): always pushed, so <br><br> still makes a blank line.
+  auto pushNewline = [&](bool force) {
+    if (!force &&
+        (wordCount == 0 || (words[wordCount - 1] && words[wordCount - 1][0] == '\n')))
+      return;
     if (wordCount < maxWords && bufferPos + 2 < bufferSize) {
       strcpy(wordBuffer + bufferPos, "\n");
       words[wordCount] = wordBuffer + bufferPos;
@@ -56,74 +97,171 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
     }
   };
 
+  // Main loop through characters
   for (int i = 0; html[i] && wordCount < maxWords; i++) {
     char c = html[i];
 
+    // Part 1: inside <script>/<style>: looking for a closing tag with the same name.
+    // When found - skipping everythong inbetween.
+    if (skipElem) {
+      if (c == '<' && html[i + 1] == '/' && ClosingTagIs(&html[i + 2], skipElem)) {
+        const char *gt = strchr(&html[i], '>');
+        if (!gt)
+          break;
+        i = (int)(gt - html);
+        skipElem = nullptr;
+      }
+      continue;
+    }
+
+    // Part 2: markup and tags
     if (c == '<') {
-      commitWord();
-      inTag = true;
 
+      // Markup: skipping everything inside the markup constructions
+
+      // Comment: skip to "-->""
+      if (strncmp(&html[i], "<!--", 4) == 0) {
+        const char *e = strstr(&html[i + 4], "-->");
+        if (!e)
+          break;
+        i = (int)(e - html) + 2;
+        continue;
+      }
+      // CDATA: skip to "]]>"
+      if (strncmp(&html[i], "<![CDATA[", 9) == 0) {
+        const char *e = strstr(&html[i + 9], "]]>");
+        if (!e)
+          break;
+        i = (int)(e - html) + 2;
+        continue;
+      }
+      // <?xml ...?>, <!DOCTYPE ...>: skip to '>'
+      if (html[i + 1] == '!' || html[i + 1] == '?') {
+        const char *gt = strchr(&html[i], '>');
+        if (!gt)
+          break;
+        i = (int)(gt - html);
+        continue;
+      }
+
+      // HTML tags:
+      //  1. Checking if it's a closing tag
+      //  2. Reading the name and finding the closing '>' of the tag
+      //  3. Checking if it's a self closing tag and decide what to do
+      //     with a tag according to it's name and status (openning/closing/self-closing).
       const char *t = &html[i + 1];
-      if (*t == '/') {
-        // Closing tags
+      bool closingTag = (*t == '/');
+      if (closingTag)
         t++;
-        if (t[0] == 'h' || t[0] == 'H') {
-          if (t[1] >= '1' && t[1] <= '3') {
-            currentStyle = TextStyle::NORMAL;
-            pushNewline();
-          }
-        } else if (strncasecmp(t, "script", 6) == 0) {
-          inScript = false;
-        } else if (strncasecmp(t, "style", 5) == 0) {
-          inStyle = false;
-        }
-      } else {
-        // Opening tags
-        if (t[0] == 'h' || t[0] == 'H') {
-          if (t[1] == '1') {
-            currentStyle = TextStyle::H1;
-            pushNewline();
-          } else if (t[1] == '2') {
-            currentStyle = TextStyle::H2;
-            pushNewline();
-          } else if (t[1] == '3') {
-            currentStyle = TextStyle::H3;
-            pushNewline();
-          }
-        } else if (t[0] == 'p' || t[0] == 'P' ||
-                   (t[0] == 'b' && (t[1] == 'r' || t[1] == 'R')) ||
-                   (t[0] == 'd' && (t[1] == 'i' || t[1] == 'I'))) {
-          // Basic check for p, br, div
-          pushNewline();
-        } else if (strncasecmp(t, "script", 6) == 0) {
-          inScript = true;
-        } else if (strncasecmp(t, "style", 5) == 0) {
-          inStyle = true;
-        }
-      }
-    } else if (c == '>') {
-      inTag = false;
-    } else if (!inTag && !inScript && !inStyle) {
-      unsigned char uc = (unsigned char)c;
-      // Check for CJK start byte (roughly 0xE0 - 0xEF for common CJK)
-      if (uc >= 0xE0 && uc <= 0xEF) {
-        // Commit pending word first
-        commitWord();
 
-        // Capture the 3-byte char as a standalone "word"
-        if (html[i + 1] && html[i + 2]) {
-          currentWord[0] = c;
-          currentWord[1] = html[i + 1];
-          currentWord[2] = html[i + 2];
-          currentWordLen = 3;
-          commitWord(); // Commit this character immediately
-          i += 2;       // Skip next 2 bytes (loop adds 1 more)
-        }
-      } else if (IsWhitespace(c)) {
-        commitWord();
-      } else if (currentWordLen < 255) {
-        currentWord[currentWordLen++] = c;
+      // Reading the tag name (lower-cased, max 15 chars).
+      char tag_name[16];
+      int nl = 0;
+      bool tooLong = false;
+      const char *p = t;
+
+      while (*p && *p != '>' && *p != '/' && !isspace((unsigned char)*p)) {
+        if (nl < 15)
+          tag_name[nl++] = (char)tolower((unsigned char)*p);
+        else
+          tooLong = true;
+        p++;
       }
+
+      tag_name[nl] = '\0';
+      if (tooLong)
+        tag_name[0] = '\0';
+
+      // Looking for the `>` that really ends the tag.
+      // Find just the first `>` isn’t enough, because attribute values 
+      // of a tag can contain one:
+      //
+      //    <a title="a > b" href="x">link</a>
+      //
+      char quote = 0;  // when quote == 0 we are outside of quotes
+      const char *q = p;
+
+      while (*q) {
+        if (quote) {
+          if (*q == quote)
+            quote = 0;
+        } else if (*q == '"' || *q == '\'') {
+          quote = *q;
+        } else if (*q == '>') {
+          break;
+        }
+        q++;
+      }
+      // *q can point either on > or \0 (bc it reached the end of the
+      // string without finding a closing >)
+      if (!*q)
+        break; // unterminated tag: stop parsing
+
+      bool selfClosingTag = (q > p && q[-1] == '/');
+
+      if (!closingTag) {
+        if (strcmp(tag_name, "script") == 0) {
+          if (!selfClosingTag)
+            skipElem = "script";
+        } else if (strcmp(tag_name, "style") == 0) {
+          if (!selfClosingTag)
+            skipElem = "style";
+        } else if (strcmp(tag_name, "br") == 0) {
+          commitWord();
+          pushNewline(true);
+        } else if (IsHeading(tag_name)) {
+          commitWord();
+          if (!selfClosingTag) { // it's a rare but valid case for XHTML
+            if (tag_name[1] == '1')
+              currentStyle = TextStyle::H1;
+            else if (tag_name[1] == '2')
+              currentStyle = TextStyle::H2;
+            else if (tag_name[1] == '3')
+              currentStyle = TextStyle::H3;
+            else
+              currentStyle = TextStyle::NORMAL;
+          }
+          pushNewline(false);
+        } else if (IsBlockTag(tag_name)) {
+          commitWord();
+          pushNewline(false);
+        }
+        // anything else (span, i, b, a, img, ...) is inline: ignored,
+        // and does not break the current word.
+      } else {
+        if (IsHeading(tag_name)) {
+          commitWord(); // commit with the heading's style first
+          currentStyle = TextStyle::NORMAL;
+          pushNewline(false);
+        } else if (IsBlockTag(tag_name)) {
+          commitWord();
+          pushNewline(false);
+        }
+      }
+
+      i = (int)(q - html); // now on '>', loop increment moves past it
+      continue;
+    }
+
+    unsigned char uc = (unsigned char)c;
+    // Check for CJK start byte (roughly 0xE0 - 0xEF for common CJK)
+    if (uc >= 0xE0 && uc <= 0xEF) {
+      // Commit pending word first
+      commitWord();
+
+      // Capture the 3-byte char as a standalone "word"
+      if (html[i + 1] && html[i + 2]) {
+        currentWord[0] = c;
+        currentWord[1] = html[i + 1];
+        currentWord[2] = html[i + 2];
+        currentWordLen = 3;
+        commitWord(); // Commit this character immediately
+        i += 2;       // Skip next 2 bytes (loop adds 1 more)
+      }
+    } else if (IsWhitespace(c)) {
+      commitWord();
+    } else if (currentWordLen < 255) {
+      currentWord[currentWordLen++] = c;
     }
   }
 
