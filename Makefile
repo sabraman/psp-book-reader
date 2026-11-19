@@ -15,5 +15,25 @@ PSP_EBOOT_TITLE = PSP-BookReader
 PSP_EBOOT_ICON = ICON0.PNG
 PSP_EBOOT_ADATA = fonts/Inter-Regular.ttf
 
-PSPSDK=$(shell psp-config --pspsdk-path)
+PSPSDK=$(shell psp-config --pspsdk-path 2>/dev/null)
+# Guarded so host-side tooling (make host-test) works without the PSP
+# SDK installed; on a machine with psp-config nothing changes.
+ifneq ($(strip $(PSPSDK)),)
 include $(PSPSDK)/lib/build.mak
+endif
+
+# --- Host-side tests (no PSP toolchain needed) ---
+# Regression tests for the HTML extractor. The only PSP dependency
+# (TextStyle, via the SDL2-needing text_renderer.h) is stubbed in
+# tests/stubs/, so this builds and runs on any host.
+HOSTCXX ?= c++
+
+.PHONY: host-test
+host-test: tests/host_test.cpp tests/stubs/text_renderer.h \
+           tests/stubs/html_text_extractor.h \
+           src/parser/html_text_extractor.cpp src/core/debug_logger.cpp
+	$(HOSTCXX) -std=c++11 -Wall -Wextra -fsanitize=address,undefined \
+	  -Itests/stubs -Iinclude tests/host_test.cpp \
+	  src/parser/html_text_extractor.cpp src/core/debug_logger.cpp \
+	  -o host-test
+	./host-test --fuzz 20000 && rm -f host-test

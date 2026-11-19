@@ -244,7 +244,13 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
         newlines++;
       }
 
-      if (newlines >= 2 && totalLines < MAX_CHAPTER_LINES) {
+      // By design a newline run collapses to one blank line; a run cut
+      // by the per-frame budget would otherwise emit one blank per
+      // chunk. An empty-text slot is always a blank line here (lines
+      // filtered as redundant metadata never occupy slots).
+      bool prevBlank =
+          totalLines > 0 && chapterLines[totalLines - 1].text[0] == '\0';
+      if (newlines >= 2 && !prevBlank && totalLines < MAX_CHAPTER_LINES) {
         chapterLines[totalLines].text[0] = '\0';
         chapterLines[totalLines].style = TextStyle::NORMAL;
         chapterLines[totalLines].startWordIdx = runStart;

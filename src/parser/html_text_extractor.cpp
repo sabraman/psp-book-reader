@@ -37,6 +37,31 @@ namespace {
     return false;
   }
 
+  // Scans forward for the '>' that really ends a markup construct,
+  // skipping quoted attribute values (which may contain '>').
+  // Returns nullptr if the string ends first. When not null,
+  // *sawGtInQuote reports whether a '>' was passed inside an open
+  // quote on the way (malformed markup: any prose between the quote
+  // and the tag end is swallowed - HTML5-tokenizer-accurate, but
+  // worth a debug log at the call site).
+  const char *FindEndGt(const char *q, bool *sawGtInQuote = nullptr) {
+    char quote = 0; // when quote == 0 we are outside of quotes
+    while (*q) {
+      if (quote) {
+        if (*q == quote)
+          quote = 0;
+        else if (*q == '>' && sawGtInQuote)
+          *sawGtInQuote = true;
+      } else if (*q == '"' || *q == '\'') {
+        quote = *q;
+      } else if (*q == '>') {
+        return q;
+      }
+      q++;
+    }
+    return nullptr;
+  }
+
 } // namespace
 
 HtmlTextExtractor::HtmlTextExtractor() {}
@@ -106,19 +131,31 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
     // Part 1: inside <script>/<style>/<title>: looking for a closing tag
     // with the same name. When found - skipping everything in between.
     if (skipElem) {
-      if (c == '<' && html[i + 1] == '/' && ClosingTagIs(&html[i + 2], skipElem)) {
-        const char *gt = strchr(&html[i], '>');
-        if (!gt) {
-          // The element never closes: the rest of the input is its
-          // content, so there is nothing more to render.
-          DebugLogger::Log("Unterminated <%s>: rest of chapter skipped",
-                           skipElem);
-          break;
-        }
-        i = (int)(gt - html);
+      // <title> content never contains other tags: hitting a different
+      // '<' means </title> is missing. Resume normal parsing there so a
+      // broken head cannot swallow the whole chapter body (unlike
+      // <script>/<style>, whose content may legitimately embed markup).
+      if (c == '<' && strcmp(skipElem, "title") == 0 &&
+          !(html[i + 1] == '/' && ClosingTagIs(&html[i + 2], skipElem))) {
+        DebugLogger::Log("Unterminated <title>: resuming at the next tag");
         skipElem = nullptr;
+        // fall through: let Part 2 below process this tag normally
+      } else {
+        if (c == '<' && html[i + 1] == '/' &&
+            ClosingTagIs(&html[i + 2], skipElem)) {
+          const char *gt = FindEndGt(&html[i]);
+          if (!gt) {
+            // The element never closes: the rest of the input is its
+            // content, so there is nothing more to render.
+            DebugLogger::Log("Unterminated <%s>: rest of chapter skipped",
+                             skipElem);
+            break;
+          }
+          i = (int)(gt - html);
+          skipElem = nullptr;
+        }
+        continue;
       }
-      continue;
     }
 
     // Part 2: markup and tags
@@ -128,6 +165,14 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
 
       // Comment: skip to "-->"
       if (strncmp(&html[i], "<!--", 4) == 0) {
+        commitWord(); // comments are invisible: don't glue the words around
+        // HTML5 abrupt-closing-of-empty-comment: <!--> and <!---> are
+        // complete comments, not unterminated ones.
+        if (html[i + 4] == '>' ||
+            (html[i + 4] == '-' && html[i + 5] == '>')) {
+          i += (html[i + 4] == '>') ? 4 : 5;
+          continue;
+        }
         const char *e = strstr(&html[i + 4], "-->");
         if (!e) {
           // Unterminated comment: it runs to the end of input (HTML5 and
@@ -140,6 +185,7 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       }
       // CDATA: skip to "]]>"
       if (strncmp(&html[i], "<![CDATA[", 9) == 0) {
+        commitWord(); // CDATA is invisible in HTML: don't glue around it
         const char *e = strstr(&html[i + 9], "]]>");
         if (!e) {
           // Unterminated CDATA: runs to the end of input, like a comment.
@@ -149,9 +195,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
         i = (int)(e - html) + 2;
         continue;
       }
-      // <?xml ...?>, <!DOCTYPE ...>: skip to '>'
+      // <?xml ...?>, <!DOCTYPE ...>: skip to the closing '>', ignoring
+      // '>' inside quoted values (same rule as normal tags).
       if (html[i + 1] == '!' || html[i + 1] == '?') {
-        const char *gt = strchr(&html[i], '>');
+        commitWord(); // declarations are invisible: don't glue around them
+        const char *gt = FindEndGt(&html[i]);
         if (!gt) {
           // Unterminated declaration: runs to the end of input.
           DebugLogger::Log("Unterminated declaration: rest of chapter skipped");
@@ -195,24 +243,18 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       //
       //    <a title="a > b" href="x">link</a>
       //
-      char quote = 0;  // when quote == 0 we are outside of quotes
-      const char *q = p;
+      // Policy note (settled): if an attribute quote stays open past a
+      // '>' (e.g. <a href="x>foo <i>y</i> ">text), the prose up to the
+      // tag's real end is swallowed into the attribute value. That is
+      // HTML5-tokenizer-accurate (browsers do exactly the same), the
+      // loss is bounded to a single tag span, and it is logged below -
+      // unlike the EOF case, which recovers leniently at the first '>'.
+      bool sawGtInQuote = false;
+      const char *q = FindEndGt(p, &sawGtInQuote);
 
-      while (*q) {
-        if (quote) {
-          if (*q == quote)
-            quote = 0;
-        } else if (*q == '"' || *q == '\'') {
-          quote = *q;
-        } else if (*q == '>') {
-          break;
-        }
-        q++;
-      }
-      // *q can point either on > or \0 (bc it reached the end of the
-      // string without finding a closing >)
+      // q is the real tag end, or null when the tag never closes.
       bool recovered = false;
-      if (!*q) {
+      if (!q) {
         // Unterminated tag (e.g. an unclosed attribute quote). Lenient
         // fallback, after the CrossPoint firmware pattern: one malformed
         // tag must not cost the reader the rest of the chapter, so resume
@@ -224,6 +266,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
         }
         recovered = true;
         DebugLogger::Log("Malformed tag: recovering at the first '>'");
+      } else if (sawGtInQuote) {
+        // The open quote span swallowed text up to this tag's end
+        // (HTML5-accurate, bounded to one tag - see the policy note above).
+        DebugLogger::Log("Malformed tag: open attribute quote swallowed "
+                         "text up to the next '>'");
       }
 
       // A recovered tag is malformed by definition: a '/' just before the
@@ -267,7 +314,10 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
           }
           pushNewline(false);
         } else if (IsBlockTag(tag_name)) {
-          commitWord();
+          commitWord(); // commit pending text with its own style first
+          // Browsers auto-close an unclosed heading at a block start;
+          // block content is always normal-styled in this model.
+          currentStyle = TextStyle::NORMAL;
           pushNewline(false);
         }
         // anything else (span, i, b, a, img, ...) is inline: ignored,
