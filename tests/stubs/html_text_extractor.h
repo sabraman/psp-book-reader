@@ -1,10 +1,5 @@
 #pragma once
 
-// Host-test mirror of include/html_text_extractor.h (identical except
-// for this note). The real header's #include "text_renderer.h" resolves
-// to the SDL2-dependent original in include/; this copy resolves it to
-// the stub in this directory. Keep in sync with the real header.
-
 #include "text_renderer.h"
 
 // Simple HTML-to-text extractor for EPUB chapters with style detection

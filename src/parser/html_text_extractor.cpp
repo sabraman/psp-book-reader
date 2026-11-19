@@ -10,6 +10,8 @@ namespace {
   // and ends at '>', '/', whitespace or end of string.
   bool ClosingTagIs(const char *s, const char *name) {
     size_t n = strlen(name);
+    if (strlen(s) < n)
+      return false; // never let strncasecmp read past the terminator
     if (strncasecmp(s, name, n) != 0)
       return false;
     char e = s[n];
@@ -145,6 +147,12 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
             ClosingTagIs(&html[i + 2], skipElem)) {
           const char *gt = FindEndGt(&html[i]);
           if (!gt) {
+            // Unterminated quote in the closing tag: lenient fallback
+            // (mirrors the tag scan) - recover at the first '>' instead
+            // of dropping the rest of the chapter.
+            gt = strchr(&html[i], '>');
+          }
+          if (!gt) {
             // The element never closes: the rest of the input is its
             // content, so there is nothing more to render.
             DebugLogger::Log("Unterminated <%s>: rest of chapter skipped",
@@ -173,14 +181,25 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
           i += (html[i + 4] == '>') ? 4 : 5;
           continue;
         }
-        const char *e = strstr(&html[i + 4], "-->");
+        // HTML5: a comment ends at "-->", or - as an incorrectly-closed
+        // comment - at "--!>". Take whichever comes first.
+        const char *e1 = strstr(&html[i + 4], "-->");
+        const char *e2 = strstr(&html[i + 4], "--!>");
+        const char *e = nullptr;
+        int eOff = 2; // distance from 'e' to the closing '>'
+        if (e1 && (!e2 || e1 <= e2)) {
+          e = e1;
+        } else if (e2) {
+          e = e2;
+          eOff = 3; // "--!>" is one char longer than "-->"
+        }
         if (!e) {
           // Unterminated comment: it runs to the end of input (HTML5 and
           // CrossPoint's lexer agree) - nothing renderable follows it.
           DebugLogger::Log("Unterminated comment: rest of chapter skipped");
           break;
         }
-        i = (int)(e - html) + 2;
+        i = (int)(e - html) + eOff;
         continue;
       }
       // CDATA: skip to "]]>"
@@ -267,10 +286,14 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
         recovered = true;
         DebugLogger::Log("Malformed tag: recovering at the first '>'");
       } else if (sawGtInQuote) {
-        // The open quote span swallowed text up to this tag's end
-        // (HTML5-accurate, bounded to one tag - see the policy note above).
-        DebugLogger::Log("Malformed tag: open attribute quote swallowed "
-                         "text up to the next '>'");
+        // A '>' was passed inside an attribute value. The parser cannot
+        // distinguish an intentional '>' in a value (title="a > b") from
+        // a forgotten closing quote that swallowed prose up to this
+        // tag's end (href="x>foo <i>y</i> ") - both parse as the same
+        // tag, exactly as the HTML5 tokenizer does. Log the pattern
+        // without claiming which one happened.
+        DebugLogger::Log("Attribute value spans a '>' (HTML5 parses it "
+                         "as part of the value)");
       }
 
       // A recovered tag is malformed by definition: a '/' just before the
@@ -332,7 +355,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
           currentStyle = TextStyle::NORMAL;
           pushNewline(false);
         } else if (IsBlockTag(tag_name)) {
-          commitWord();
+          commitWord(); // commit pending text with its own style first
+          // Browsers also auto-close an unclosed heading at a stray
+          // closing block tag (</p>, </div>): keep the reset symmetric
+          // with the opening branch.
+          currentStyle = TextStyle::NORMAL;
           pushNewline(false);
         }
       }

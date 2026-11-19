@@ -1,3 +1,4 @@
+#include "blank_line_layout.h"
 #include "cover_renderer.h"
 #include "debug_logger.h"
 #include "epub_reader.h"
@@ -43,6 +44,7 @@ struct LineInfo {
   TextStyle style;
   int startWordIdx;  // Used for anchor tracking during reflow
   uint64_t cacheKey; // Pre-calculated render key
+  bool isBlank;      // True only for slots written by the blank-line path
 };
 
 static int layoutMargin = 24;
@@ -244,32 +246,25 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
         newlines++;
       }
 
-      // By design a newline run collapses to one blank line; a run cut
-      // by the per-frame budget would otherwise emit one blank per
-      // chunk. An empty-text slot is always a blank line here (lines
-      // filtered as redundant metadata never occupy slots).
       bool prevBlank =
-          totalLines > 0 && chapterLines[totalLines - 1].text[0] == '\0';
-      if (newlines >= 2 && !prevBlank && totalLines < MAX_CHAPTER_LINES) {
-        chapterLines[totalLines].text[0] = '\0';
-        chapterLines[totalLines].style = TextStyle::NORMAL;
-        chapterLines[totalLines].startWordIdx = runStart;
-        chapterLines[totalLines].cacheKey = 0; // never rendered, so no key
-
+          totalLines > 0 && chapterLines[totalLines - 1].isBlank;
+      NewlineRunResult<LineInfo> run = LayoutNewlineRun(
+          runStart, newlines, totalLines, MAX_CHAPTER_LINES, linesPerPage,
+          prevBlank, layoutState.targetWordIdx, layoutState.wordIdx,
+          chapterLines);
+      if (run.emitted) {
         // Position Recovery Logic
-        if (layoutState.targetWordIdx >= 0 &&
-            runStart <= layoutState.targetWordIdx &&
-            layoutState.wordIdx > layoutState.targetWordIdx) {
-          currentLine = totalLines;
+        if (run.focusTarget) {
+          currentLine = run.emittedSlotIndex;
           currentPageIdx = pageAnchors.size() - 1;
           layoutState.targetWordIdx = -1; // Position focused
         }
 
-        totalLines++;
+        totalLines = run.newTotalLines;
         layoutState.lineCount++;
 
         // Pagination Tracking
-        if (totalLines > 0 && totalLines % linesPerPage == 0) {
+        if (run.pushAnchor) {
           pageAnchors.push_back(layoutState.wordIdx);
         }
       }
@@ -340,6 +335,7 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
         chapterLines[totalLines].startWordIdx = lineStartWordIdx;
         chapterLines[totalLines].cacheKey =
             renderer.GetCacheKey(linePtr, currentLineStyle);
+        chapterLines[totalLines].isBlank = false;
 
         // Position Recovery Logic
         if (layoutState.targetWordIdx >= 0 &&
