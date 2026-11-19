@@ -231,8 +231,42 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
   while (layoutState.wordIdx < MAX_WORDS &&
          words[layoutState.wordIdx] != nullptr && wordsProcessed < maxWords) {
     if (words[layoutState.wordIdx][0] == '\n') {
-      layoutState.wordIdx++;
-      wordsProcessed++;
+      // A single '\n' word just ends the previous line; two or more in a
+      // row (e.g. <br><br>) make a visible blank line. The render loop
+      // leaves the slot of an empty-text line visually blank.
+      int runStart = layoutState.wordIdx;
+      int newlines = 0;
+      while (layoutState.wordIdx < MAX_WORDS &&
+             words[layoutState.wordIdx] != nullptr &&
+             words[layoutState.wordIdx][0] == '\n' && wordsProcessed < maxWords) {
+        layoutState.wordIdx++;
+        wordsProcessed++;
+        newlines++;
+      }
+
+      if (newlines >= 2 && totalLines < MAX_CHAPTER_LINES) {
+        chapterLines[totalLines].text[0] = '\0';
+        chapterLines[totalLines].style = TextStyle::NORMAL;
+        chapterLines[totalLines].startWordIdx = runStart;
+        chapterLines[totalLines].cacheKey = 0; // never rendered, so no key
+
+        // Position Recovery Logic
+        if (layoutState.targetWordIdx >= 0 &&
+            runStart <= layoutState.targetWordIdx &&
+            layoutState.wordIdx > layoutState.targetWordIdx) {
+          currentLine = totalLines;
+          currentPageIdx = pageAnchors.size() - 1;
+          layoutState.targetWordIdx = -1; // Position focused
+        }
+
+        totalLines++;
+        layoutState.lineCount++;
+
+        // Pagination Tracking
+        if (totalLines > 0 && totalLines % linesPerPage == 0) {
+          pageAnchors.push_back(layoutState.wordIdx);
+        }
+      }
       continue;
     }
 

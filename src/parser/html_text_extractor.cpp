@@ -22,11 +22,12 @@ namespace {
 
   bool IsBlockTag(const char *name) {
     static const char *kBlock[] = {
-        "p",      "div",  "li",    "ul",    "ol",        "dl",
-        "dt",     "dd",   "tr",    "table", "caption",   "section",
-        "article","aside","header","footer","nav",       "blockquote",
-        "pre",    "hr",   "hgroup","figure","figcaption","address",
-        "body"
+        "p",       "div",     "li",     "ul",       "ol",     "dl",
+        "dt",      "dd",      "tr",     "td",       "th",     "table",
+        "thead",   "tbody",   "tfoot",  "caption",  "option", "section",
+        "article", "aside",   "header", "footer",   "nav",    "blockquote",
+        "pre",     "hr",      "hgroup", "figure",   "figcaption",
+        "address", "body"
     };
 
     for (const char *b : kBlock)
@@ -58,7 +59,7 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
   int bufferPos = 0;
   TextStyle currentStyle = TextStyle::NORMAL;
 
-  // When non-null we are inside <script> or <style>: everything is
+  // When non-null we are inside <script>/<style>/<title>: everything is
   // ignored until the matching closing tag.
   const char *skipElem = nullptr;
 
@@ -82,7 +83,8 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
 
   // force == false: skipped at the very start and if the previous word is
   // already a newline (so nested blocks / </p><p> give one break, not many).
-  // force == true (<br>): always pushed, so <br><br> still makes a blank line.
+  // force == true (<br>): always pushed; the layout renders a run of two
+  // or more '\n' words as a visible blank line (so <br><br> makes one).
   auto pushNewline = [&](bool force) {
     if (!force &&
         (wordCount == 0 || (words[wordCount - 1] && words[wordCount - 1][0] == '\n')))
@@ -101,13 +103,18 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
   for (int i = 0; html[i] && wordCount < maxWords; i++) {
     char c = html[i];
 
-    // Part 1: inside <script>/<style>: looking for a closing tag with the same name.
-    // When found - skipping everythong inbetween.
+    // Part 1: inside <script>/<style>/<title>: looking for a closing tag
+    // with the same name. When found - skipping everything in between.
     if (skipElem) {
       if (c == '<' && html[i + 1] == '/' && ClosingTagIs(&html[i + 2], skipElem)) {
         const char *gt = strchr(&html[i], '>');
-        if (!gt)
+        if (!gt) {
+          // The element never closes: the rest of the input is its
+          // content, so there is nothing more to render.
+          DebugLogger::Log("Unterminated <%s>: rest of chapter skipped",
+                           skipElem);
           break;
+        }
         i = (int)(gt - html);
         skipElem = nullptr;
       }
@@ -119,27 +126,37 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
 
       // Markup: skipping everything inside the markup constructions
 
-      // Comment: skip to "-->""
+      // Comment: skip to "-->"
       if (strncmp(&html[i], "<!--", 4) == 0) {
         const char *e = strstr(&html[i + 4], "-->");
-        if (!e)
+        if (!e) {
+          // Unterminated comment: it runs to the end of input (HTML5 and
+          // CrossPoint's lexer agree) - nothing renderable follows it.
+          DebugLogger::Log("Unterminated comment: rest of chapter skipped");
           break;
+        }
         i = (int)(e - html) + 2;
         continue;
       }
       // CDATA: skip to "]]>"
       if (strncmp(&html[i], "<![CDATA[", 9) == 0) {
         const char *e = strstr(&html[i + 9], "]]>");
-        if (!e)
+        if (!e) {
+          // Unterminated CDATA: runs to the end of input, like a comment.
+          DebugLogger::Log("Unterminated CDATA: rest of chapter skipped");
           break;
+        }
         i = (int)(e - html) + 2;
         continue;
       }
       // <?xml ...?>, <!DOCTYPE ...>: skip to '>'
       if (html[i + 1] == '!' || html[i + 1] == '?') {
         const char *gt = strchr(&html[i], '>');
-        if (!gt)
+        if (!gt) {
+          // Unterminated declaration: runs to the end of input.
+          DebugLogger::Log("Unterminated declaration: rest of chapter skipped");
           break;
+        }
         i = (int)(gt - html);
         continue;
       }
@@ -148,7 +165,7 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       //  1. Checking if it's a closing tag
       //  2. Reading the name and finding the closing '>' of the tag
       //  3. Checking if it's a self closing tag and decide what to do
-      //     with a tag according to it's name and status (openning/closing/self-closing).
+      //     with a tag according to its name and status (opening/closing/self-closing).
       const char *t = &html[i + 1];
       bool closingTag = (*t == '/');
       if (closingTag)
@@ -173,7 +190,7 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
         tag_name[0] = '\0';
 
       // Looking for the `>` that really ends the tag.
-      // Find just the first `>` isn’t enough, because attribute values 
+      // Finding just the first `>` isn't enough, because attribute values
       // of a tag can contain one:
       //
       //    <a title="a > b" href="x">link</a>
@@ -194,18 +211,39 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       }
       // *q can point either on > or \0 (bc it reached the end of the
       // string without finding a closing >)
-      if (!*q)
-        break; // unterminated tag: stop parsing
+      if (!*q) {
+        // Unterminated tag (e.g. an unclosed attribute quote). Lenient
+        // fallback, after the CrossPoint firmware pattern: one malformed
+        // tag must not cost the reader the rest of the chapter, so resume
+        // at the first '>' and keep rendering the text that follows.
+        q = strchr(p, '>');
+        if (!q) {
+          DebugLogger::Log("Unterminated tag: rest of chapter skipped");
+          break; // no '>' at all: the tag runs to the end of input
+        }
+        DebugLogger::Log("Malformed tag: recovering at the first '>'");
+      }
 
       bool selfClosingTag = (q > p && q[-1] == '/');
 
       if (!closingTag) {
         if (strcmp(tag_name, "script") == 0) {
-          if (!selfClosingTag)
+          if (!selfClosingTag) {
+            commitWord(); // don't glue the words around the skipped element
             skipElem = "script";
+          }
         } else if (strcmp(tag_name, "style") == 0) {
-          if (!selfClosingTag)
+          if (!selfClosingTag) {
+            commitWord();
             skipElem = "style";
+          }
+        } else if (strcmp(tag_name, "title") == 0) {
+          // <title> is the only text-bearing <head> element in practice;
+          // skip to </title> so the chapter title doesn't leak as line 1.
+          if (!selfClosingTag) {
+            commitWord();
+            skipElem = "title";
+          }
         } else if (strcmp(tag_name, "br") == 0) {
           commitWord();
           pushNewline(true);
@@ -229,7 +267,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
         // anything else (span, i, b, a, img, ...) is inline: ignored,
         // and does not break the current word.
       } else {
-        if (IsHeading(tag_name)) {
+        if (strcmp(tag_name, "br") == 0) {
+          // Browsers treat a stray </br> as <br>.
+          commitWord();
+          pushNewline(true);
+        } else if (IsHeading(tag_name)) {
           commitWord(); // commit with the heading's style first
           currentStyle = TextStyle::NORMAL;
           pushNewline(false);
