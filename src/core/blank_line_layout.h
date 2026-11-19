@@ -11,7 +11,7 @@
 
 #include "text_renderer.h"
 
-template <typename SlotT> struct NewlineRunResult {
+struct NewlineRunResult {
   bool emitted = false;       // a blank slot was written
   int emittedSlotIndex = -1; // slot the caller should focus on
   int newTotalLines = 0;      // totalLines after this run
@@ -24,15 +24,19 @@ template <typename SlotT> struct NewlineRunResult {
 // render as exactly one blank line. `prevBlank` (the previously emitted
 // slot is itself a blank) dedups runs that the per-frame budget split
 // across chunks, so consecutive blanks can never be emitted.
-// Requires linesPerPage >= 1 (processLayout guarantees it).
+// `linesPerPage` is clamped to >= 1 internally, so a standalone caller
+// cannot hit a division by zero (processLayout already clamps).
 template <typename SlotT>
-NewlineRunResult<SlotT> LayoutNewlineRun(int runStart, int newlines,
-                                        int totalLines, int maxLines,
-                                        int linesPerPage, bool prevBlank,
-                                        int targetWordIdx, int wordIdxAfter,
-                                        SlotT *slots) {
-  NewlineRunResult<SlotT> r;
+NewlineRunResult LayoutNewlineRun(int runStart, int newlines,
+                                 int totalLines, int maxLines,
+                                 int linesPerPage, bool prevBlank,
+                                 int targetWordIdx, int wordIdxAfter,
+                                 SlotT *slots) {
+  NewlineRunResult r;
   r.newTotalLines = totalLines;
+
+  if (linesPerPage < 1)
+    linesPerPage = 1;
 
   if (newlines < 2 || prevBlank || totalLines >= maxLines)
     return r; // a single '\n' is just a line terminator; blanks never stack

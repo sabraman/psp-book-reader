@@ -266,6 +266,24 @@ static void layoutTests() {
           !LayoutNewlineRun(0, 2, 0, 4, 10, false, -1, 2, slots).focusTarget);
   }
 
+  // prevBlank forces the early return with all result fields defaulted.
+  {
+    TestLine slots[4] = {};
+    auto r = LayoutNewlineRun(0, 2, 0, 4, 10, true, 5, 2, slots);
+    check("prevBlank short-circuits with defaults",
+          !r.emitted && !r.focusTarget && !r.pushAnchor &&
+              r.newTotalLines == 0 && r.emittedSlotIndex == -1);
+  }
+
+  // A standalone caller cannot hit a division by zero: linesPerPage is
+  // clamped internally (clamping to 1 makes every line a page boundary).
+  {
+    TestLine slots[4] = {};
+    auto r = LayoutNewlineRun(0, 2, 0, 4, 0, false, -1, 2, slots);
+    check("linesPerPage clamped to 1, no division by zero",
+          r.emitted && r.pushAnchor);
+  }
+
   // Pagination: anchor lands exactly on page boundaries.
   {
     TestLine slots[20] = {};
@@ -360,8 +378,8 @@ int main(int argc, char **argv) {
                   "after", TextStyle::NORMAL);
   expectWordStyle("self-closing h3 keeps style", "<h3/>after", "after",
                   TextStyle::NORMAL);
-  // Browsers auto-close an unclosed heading at a block start (open or
-  // stray closing tag alike).
+  // Simplified model: any block boundary (open or stray close)
+  // auto-closes an unclosed heading.
   expectWordStyle("heading auto-closed at block open", "<h1>Title<p>para",
                   "Title", TextStyle::H1);
   expectWordStyle("block after unclosed heading is normal", "<h1>Title<p>para",
@@ -385,6 +403,9 @@ int main(int argc, char **argv) {
                  "<p>a</p><img src=\"x", "Unterminated tag");
   expectLogFires("unterminated comment logs the skip",
                  "A<!-- never closed", "Unterminated comment");
+  expectLogFires("skipElem closing-quote recovery logs",
+                 "<p>x</p><script>a</script \">after",
+                 "recovering at the first '>'");
 
   // --- 8. Integration sanity ---
   expect("realistic chapter",

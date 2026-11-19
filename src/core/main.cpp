@@ -248,7 +248,7 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
 
       bool prevBlank =
           totalLines > 0 && chapterLines[totalLines - 1].isBlank;
-      NewlineRunResult<LineInfo> run = LayoutNewlineRun(
+      NewlineRunResult run = LayoutNewlineRun(
           runStart, newlines, totalLines, MAX_CHAPTER_LINES, linesPerPage,
           prevBlank, layoutState.targetWordIdx, layoutState.wordIdx,
           chapterLines);

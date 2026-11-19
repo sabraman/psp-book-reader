@@ -43,9 +43,10 @@ namespace {
   // skipping quoted attribute values (which may contain '>').
   // Returns nullptr if the string ends first. When not null,
   // *sawGtInQuote reports whether a '>' was passed inside an open
-  // quote on the way (malformed markup: any prose between the quote
-  // and the tag end is swallowed - HTML5-tokenizer-accurate, but
-  // worth a debug log at the call site).
+  // quote on the way. That is only pattern evidence: the parser cannot
+  // distinguish an intentional '>' in a value (title="a > b") from a
+  // forgotten closing quote, so the call site logs the pattern without
+  // claiming which one happened.
   const char *FindEndGt(const char *q, bool *sawGtInQuote = nullptr) {
     char quote = 0; // when quote == 0 we are outside of quotes
     while (*q) {
@@ -150,6 +151,7 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
             // Unterminated quote in the closing tag: lenient fallback
             // (mirrors the tag scan) - recover at the first '>' instead
             // of dropping the rest of the chapter.
+            DebugLogger::Log("Malformed tag: recovering at the first '>'");
             gt = strchr(&html[i], '>');
           }
           if (!gt) {
@@ -268,6 +270,8 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       // HTML5-tokenizer-accurate (browsers do exactly the same), the
       // loss is bounded to a single tag span, and it is logged below -
       // unlike the EOF case, which recovers leniently at the first '>'.
+      // The log wording ("Attribute value spans a '>'") is deliberately
+      // pattern-neutral: see FindEndGt for why no verdict is possible.
       bool sawGtInQuote = false;
       const char *q = FindEndGt(p, &sawGtInQuote);
 
@@ -338,8 +342,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
           pushNewline(false);
         } else if (IsBlockTag(tag_name)) {
           commitWord(); // commit pending text with its own style first
-          // Browsers auto-close an unclosed heading at a block start;
-          // block content is always normal-styled in this model.
+          // Simplified model: any block boundary (opening tag or stray
+          // closing tag) auto-closes an open heading; block content is
+          // always normal-styled here. Not strict HTML5: browsers keep
+          // the heading open through <p>/<div> - the symmetry is the
+          // point, not browser fidelity.
           currentStyle = TextStyle::NORMAL;
           pushNewline(false);
         }
@@ -356,9 +363,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
           pushNewline(false);
         } else if (IsBlockTag(tag_name)) {
           commitWord(); // commit pending text with its own style first
-          // Browsers also auto-close an unclosed heading at a stray
-          // closing block tag (</p>, </div>): keep the reset symmetric
-          // with the opening branch.
+          // Same simplified model as the opening branch: any block
+          // boundary resets the heading style. (Not strict HTML5: a
+          // stray </p> inserts an empty p and an unmatched </div> is
+          // ignored, so browsers would keep the heading open - the
+          // symmetry is the point.)
           currentStyle = TextStyle::NORMAL;
           pushNewline(false);
         }

@@ -39,4 +39,4 @@ host-test: tests/host_test.cpp tests/stubs/text_renderer.h \
 	  -fsanitize=address,undefined \
 	  -Itests/stubs -Isrc/core -Iinclude tests/host_test.cpp \
 	  src/parser/html_text_extractor.cpp -o host-test
-	./host-test --fuzz 20000 && rm -f host-test && rm -rf host-test.dSYM
+	./host-test --fuzz 20000; rc=$$?; rm -f host-test; rm -rf host-test.dSYM; exit $$rc
