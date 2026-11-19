@@ -1,3 +1,4 @@
+#include "blank_line_layout.h"
 #include "cover_renderer.h"
 #include "debug_logger.h"
 #include "epub_reader.h"
@@ -43,6 +44,7 @@ struct LineInfo {
   TextStyle style;
   int startWordIdx;  // Used for anchor tracking during reflow
   uint64_t cacheKey; // Pre-calculated render key
+  bool isBlank;      // True only for slots written by the blank-line path
 };
 
 static int layoutMargin = 24;
@@ -231,8 +233,41 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
   while (layoutState.wordIdx < MAX_WORDS &&
          words[layoutState.wordIdx] != nullptr && wordsProcessed < maxWords) {
     if (words[layoutState.wordIdx][0] == '\n') {
-      layoutState.wordIdx++;
-      wordsProcessed++;
+      // A single '\n' word just ends the previous line; two or more in a
+      // row (e.g. <br><br>) make a visible blank line. The render loop
+      // leaves the slot of an empty-text line visually blank.
+      int runStart = layoutState.wordIdx;
+      int newlines = 0;
+      while (layoutState.wordIdx < MAX_WORDS &&
+             words[layoutState.wordIdx] != nullptr &&
+             words[layoutState.wordIdx][0] == '\n' && wordsProcessed < maxWords) {
+        layoutState.wordIdx++;
+        wordsProcessed++;
+        newlines++;
+      }
+
+      bool prevBlank =
+          totalLines > 0 && chapterLines[totalLines - 1].isBlank;
+      NewlineRunResult run = LayoutNewlineRun(
+          runStart, newlines, totalLines, MAX_CHAPTER_LINES, linesPerPage,
+          prevBlank, layoutState.targetWordIdx, layoutState.wordIdx,
+          chapterLines);
+      if (run.emitted) {
+        // Position Recovery Logic
+        if (run.focusTarget) {
+          currentLine = run.emittedSlotIndex;
+          currentPageIdx = pageAnchors.size() - 1;
+          layoutState.targetWordIdx = -1; // Position focused
+        }
+
+        totalLines = run.newTotalLines;
+        layoutState.lineCount++;
+
+        // Pagination Tracking
+        if (run.pushAnchor) {
+          pageAnchors.push_back(layoutState.wordIdx);
+        }
+      }
       continue;
     }
 
@@ -300,6 +335,7 @@ bool processLayout(EpubReader &reader, TextRenderer &renderer,
         chapterLines[totalLines].startWordIdx = lineStartWordIdx;
         chapterLines[totalLines].cacheKey =
             renderer.GetCacheKey(linePtr, currentLineStyle);
+        chapterLines[totalLines].isBlank = false;
 
         // Position Recovery Logic
         if (layoutState.targetWordIdx >= 0 &&

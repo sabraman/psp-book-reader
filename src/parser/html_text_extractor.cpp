@@ -4,6 +4,69 @@
 #include <cstring>
 #include <strings.h>
 
+namespace {
+  // 's' points just after "</".
+  // Returns `true` if the tag name equals `name` (case-insensitive)
+  // and ends at '>', '/', whitespace or end of string.
+  bool ClosingTagIs(const char *s, const char *name) {
+    size_t n = strlen(name);
+    if (strlen(s) < n)
+      return false; // never let strncasecmp read past the terminator
+    if (strncasecmp(s, name, n) != 0)
+      return false;
+    char e = s[n];
+    return e == '>' || e == '/' || e == '\0' || isspace((unsigned char)e);
+  }
+
+  bool IsHeading(const char *name) {
+    return name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && name[2] == '\0';
+  }
+
+  bool IsBlockTag(const char *name) {
+    static const char *kBlock[] = {
+        "p",       "div",     "li",     "ul",       "ol",     "dl",
+        "dt",      "dd",      "tr",     "td",       "th",     "table",
+        "thead",   "tbody",   "tfoot",  "caption",  "option", "section",
+        "article", "aside",   "header", "footer",   "nav",    "blockquote",
+        "pre",     "hr",      "hgroup", "figure",   "figcaption",
+        "address", "body"
+    };
+
+    for (const char *b : kBlock)
+      if (strcmp(name, b) == 0)
+        return true;
+
+    return false;
+  }
+
+  // Scans forward for the '>' that really ends a markup construct,
+  // skipping quoted attribute values (which may contain '>').
+  // Returns nullptr if the string ends first. When not null,
+  // *sawGtInQuote reports whether a '>' was passed inside an open
+  // quote on the way. That is only pattern evidence: the parser cannot
+  // distinguish an intentional '>' in a value (title="a > b") from a
+  // forgotten closing quote, so the call site logs the pattern without
+  // claiming which one happened.
+  const char *FindEndGt(const char *q, bool *sawGtInQuote = nullptr) {
+    char quote = 0; // when quote == 0 we are outside of quotes
+    while (*q) {
+      if (quote) {
+        if (*q == quote)
+          quote = 0;
+        else if (*q == '>' && sawGtInQuote)
+          *sawGtInQuote = true;
+      } else if (*q == '"' || *q == '\'') {
+        quote = *q;
+      } else if (*q == '>') {
+        return q;
+      }
+      q++;
+    }
+    return nullptr;
+  }
+
+} // namespace
+
 HtmlTextExtractor::HtmlTextExtractor() {}
 
 HtmlTextExtractor::~HtmlTextExtractor() {}
@@ -22,10 +85,11 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
 
   int wordCount = 0;
   int bufferPos = 0;
-  bool inTag = false;
-  bool inScript = false;
-  bool inStyle = false;
   TextStyle currentStyle = TextStyle::NORMAL;
+
+  // When non-null we are inside <script>/<style>/<title>: everything is
+  // ignored until the matching closing tag.
+  const char *skipElem = nullptr;
 
   char currentWord[256];
   int currentWordLen = 0;
@@ -45,7 +109,14 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
     }
   };
 
-  auto pushNewline = [&]() {
+  // force == false: skipped at the very start and if the previous word is
+  // already a newline (so nested blocks / </p><p> give one break, not many).
+  // force == true (<br>): always pushed; the layout renders a run of two
+  // or more '\n' words as a visible blank line (so <br><br> makes one).
+  auto pushNewline = [&](bool force) {
+    if (!force &&
+        (wordCount == 0 || (words[wordCount - 1] && words[wordCount - 1][0] == '\n')))
+      return;
     if (wordCount < maxWords && bufferPos + 2 < bufferSize) {
       strcpy(wordBuffer + bufferPos, "\n");
       words[wordCount] = wordBuffer + bufferPos;
@@ -56,74 +127,275 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
     }
   };
 
+  // Main loop through characters
   for (int i = 0; html[i] && wordCount < maxWords; i++) {
     char c = html[i];
 
-    if (c == '<') {
-      commitWord();
-      inTag = true;
-
-      const char *t = &html[i + 1];
-      if (*t == '/') {
-        // Closing tags
-        t++;
-        if (t[0] == 'h' || t[0] == 'H') {
-          if (t[1] >= '1' && t[1] <= '3') {
-            currentStyle = TextStyle::NORMAL;
-            pushNewline();
-          }
-        } else if (strncasecmp(t, "script", 6) == 0) {
-          inScript = false;
-        } else if (strncasecmp(t, "style", 5) == 0) {
-          inStyle = false;
-        }
+    // Part 1: inside <script>/<style>/<title>: looking for a closing tag
+    // with the same name. When found - skipping everything in between.
+    if (skipElem) {
+      // <title> content never contains other tags: hitting a different
+      // '<' means </title> is missing. Resume normal parsing there so a
+      // broken head cannot swallow the whole chapter body (unlike
+      // <script>/<style>, whose content may legitimately embed markup).
+      if (c == '<' && strcmp(skipElem, "title") == 0 &&
+          !(html[i + 1] == '/' && ClosingTagIs(&html[i + 2], skipElem))) {
+        DebugLogger::Log("Unterminated <title>: resuming at the next tag");
+        skipElem = nullptr;
+        // fall through: let Part 2 below process this tag normally
       } else {
-        // Opening tags
-        if (t[0] == 'h' || t[0] == 'H') {
-          if (t[1] == '1') {
-            currentStyle = TextStyle::H1;
-            pushNewline();
-          } else if (t[1] == '2') {
-            currentStyle = TextStyle::H2;
-            pushNewline();
-          } else if (t[1] == '3') {
-            currentStyle = TextStyle::H3;
-            pushNewline();
+        if (c == '<' && html[i + 1] == '/' &&
+            ClosingTagIs(&html[i + 2], skipElem)) {
+          const char *gt = FindEndGt(&html[i]);
+          if (!gt) {
+            // Unterminated quote in the closing tag: lenient fallback
+            // (mirrors the tag scan) - recover at the first '>' instead
+            // of dropping the rest of the chapter.
+            DebugLogger::Log("Malformed tag: recovering at the first '>'");
+            gt = strchr(&html[i], '>');
           }
-        } else if (t[0] == 'p' || t[0] == 'P' ||
-                   (t[0] == 'b' && (t[1] == 'r' || t[1] == 'R')) ||
-                   (t[0] == 'd' && (t[1] == 'i' || t[1] == 'I'))) {
-          // Basic check for p, br, div
-          pushNewline();
-        } else if (strncasecmp(t, "script", 6) == 0) {
-          inScript = true;
-        } else if (strncasecmp(t, "style", 5) == 0) {
-          inStyle = true;
+          if (!gt) {
+            // The element never closes: the rest of the input is its
+            // content, so there is nothing more to render.
+            DebugLogger::Log("Unterminated <%s>: rest of chapter skipped",
+                             skipElem);
+            break;
+          }
+          i = (int)(gt - html);
+          skipElem = nullptr;
         }
+        continue;
       }
-    } else if (c == '>') {
-      inTag = false;
-    } else if (!inTag && !inScript && !inStyle) {
-      unsigned char uc = (unsigned char)c;
-      // Check for CJK start byte (roughly 0xE0 - 0xEF for common CJK)
-      if (uc >= 0xE0 && uc <= 0xEF) {
-        // Commit pending word first
-        commitWord();
+    }
 
-        // Capture the 3-byte char as a standalone "word"
-        if (html[i + 1] && html[i + 2]) {
-          currentWord[0] = c;
-          currentWord[1] = html[i + 1];
-          currentWord[2] = html[i + 2];
-          currentWordLen = 3;
-          commitWord(); // Commit this character immediately
-          i += 2;       // Skip next 2 bytes (loop adds 1 more)
+    // Part 2: markup and tags
+    if (c == '<') {
+
+      // Markup: skipping everything inside the markup constructions
+
+      // Comment: skip to "-->"
+      if (strncmp(&html[i], "<!--", 4) == 0) {
+        commitWord(); // comments are invisible: don't glue the words around
+        // HTML5 abrupt-closing-of-empty-comment: <!--> and <!---> are
+        // complete comments, not unterminated ones.
+        if (html[i + 4] == '>' ||
+            (html[i + 4] == '-' && html[i + 5] == '>')) {
+          i += (html[i + 4] == '>') ? 4 : 5;
+          continue;
         }
-      } else if (IsWhitespace(c)) {
-        commitWord();
-      } else if (currentWordLen < 255) {
-        currentWord[currentWordLen++] = c;
+        // HTML5: a comment ends at "-->", or - as an incorrectly-closed
+        // comment - at "--!>". Take whichever comes first.
+        const char *e1 = strstr(&html[i + 4], "-->");
+        const char *e2 = strstr(&html[i + 4], "--!>");
+        const char *e = nullptr;
+        int eOff = 2; // distance from 'e' to the closing '>'
+        if (e1 && (!e2 || e1 <= e2)) {
+          e = e1;
+        } else if (e2) {
+          e = e2;
+          eOff = 3; // "--!>" is one char longer than "-->"
+        }
+        if (!e) {
+          // Unterminated comment: it runs to the end of input (HTML5 and
+          // CrossPoint's lexer agree) - nothing renderable follows it.
+          DebugLogger::Log("Unterminated comment: rest of chapter skipped");
+          break;
+        }
+        i = (int)(e - html) + eOff;
+        continue;
       }
+      // CDATA: skip to "]]>"
+      if (strncmp(&html[i], "<![CDATA[", 9) == 0) {
+        commitWord(); // CDATA is invisible in HTML: don't glue around it
+        const char *e = strstr(&html[i + 9], "]]>");
+        if (!e) {
+          // Unterminated CDATA: runs to the end of input, like a comment.
+          DebugLogger::Log("Unterminated CDATA: rest of chapter skipped");
+          break;
+        }
+        i = (int)(e - html) + 2;
+        continue;
+      }
+      // <?xml ...?>, <!DOCTYPE ...>: skip to the closing '>', ignoring
+      // '>' inside quoted values (same rule as normal tags).
+      if (html[i + 1] == '!' || html[i + 1] == '?') {
+        commitWord(); // declarations are invisible: don't glue around them
+        const char *gt = FindEndGt(&html[i]);
+        if (!gt) {
+          // Unterminated declaration: runs to the end of input.
+          DebugLogger::Log("Unterminated declaration: rest of chapter skipped");
+          break;
+        }
+        i = (int)(gt - html);
+        continue;
+      }
+
+      // HTML tags:
+      //  1. Checking if it's a closing tag
+      //  2. Reading the name and finding the closing '>' of the tag
+      //  3. Checking if it's a self closing tag and decide what to do
+      //     with a tag according to its name and status (opening/closing/self-closing).
+      const char *t = &html[i + 1];
+      bool closingTag = (*t == '/');
+      if (closingTag)
+        t++;
+
+      // Reading the tag name (lower-cased, max 15 chars).
+      char tag_name[16];
+      int nl = 0;
+      bool tooLong = false;
+      const char *p = t;
+
+      while (*p && *p != '>' && *p != '/' && !isspace((unsigned char)*p)) {
+        if (nl < 15)
+          tag_name[nl++] = (char)tolower((unsigned char)*p);
+        else
+          tooLong = true;
+        p++;
+      }
+
+      tag_name[nl] = '\0';
+      if (tooLong)
+        tag_name[0] = '\0';
+
+      // Looking for the `>` that really ends the tag.
+      // Finding just the first `>` isn't enough, because attribute values
+      // of a tag can contain one:
+      //
+      //    <a title="a > b" href="x">link</a>
+      //
+      // Policy note (settled): if an attribute quote stays open past a
+      // '>' (e.g. <a href="x>foo <i>y</i> ">text), the prose up to the
+      // tag's real end is swallowed into the attribute value. That is
+      // HTML5-tokenizer-accurate (browsers do exactly the same), the
+      // loss is bounded to a single tag span, and it is logged below -
+      // unlike the EOF case, which recovers leniently at the first '>'.
+      // The log wording ("Attribute value spans a '>'") is deliberately
+      // pattern-neutral: see FindEndGt for why no verdict is possible.
+      bool sawGtInQuote = false;
+      const char *q = FindEndGt(p, &sawGtInQuote);
+
+      // q is the real tag end, or null when the tag never closes.
+      bool recovered = false;
+      if (!q) {
+        // Unterminated tag (e.g. an unclosed attribute quote). Lenient
+        // fallback, after the CrossPoint firmware pattern: one malformed
+        // tag must not cost the reader the rest of the chapter, so resume
+        // at the first '>' and keep rendering the text that follows.
+        q = strchr(p, '>');
+        if (!q) {
+          DebugLogger::Log("Unterminated tag: rest of chapter skipped");
+          break; // no '>' at all: the tag runs to the end of input
+        }
+        recovered = true;
+        DebugLogger::Log("Malformed tag: recovering at the first '>'");
+      } else if (sawGtInQuote) {
+        // A '>' was passed inside an attribute value. The parser cannot
+        // distinguish an intentional '>' in a value (title="a > b") from
+        // a forgotten closing quote that swallowed prose up to this
+        // tag's end (href="x>foo <i>y</i> ") - both parse as the same
+        // tag, exactly as the HTML5 tokenizer does. Log the pattern
+        // without claiming which one happened.
+        DebugLogger::Log("Attribute value spans a '>' (HTML5 parses it "
+                         "as part of the value)");
+      }
+
+      // A recovered tag is malformed by definition: a '/' just before the
+      // recovered '>' may be a quote fragment, not a self-closing marker.
+      // Treat it as a normal tag so <script src="foo/> (missing closing
+      // quote) still enters the skipElem path instead of leaking its body.
+      bool selfClosingTag = !recovered && q > p && q[-1] == '/';
+
+      if (!closingTag) {
+        if (strcmp(tag_name, "script") == 0) {
+          if (!selfClosingTag) {
+            commitWord(); // don't glue the words around the skipped element
+            skipElem = "script";
+          }
+        } else if (strcmp(tag_name, "style") == 0) {
+          if (!selfClosingTag) {
+            commitWord();
+            skipElem = "style";
+          }
+        } else if (strcmp(tag_name, "title") == 0) {
+          // <title> is the only text-bearing <head> element in practice;
+          // skip to </title> so the chapter title doesn't leak as line 1.
+          if (!selfClosingTag) {
+            commitWord();
+            skipElem = "title";
+          }
+        } else if (strcmp(tag_name, "br") == 0) {
+          commitWord();
+          pushNewline(true);
+        } else if (IsHeading(tag_name)) {
+          commitWord();
+          if (!selfClosingTag) { // it's a rare but valid case for XHTML
+            if (tag_name[1] == '1')
+              currentStyle = TextStyle::H1;
+            else if (tag_name[1] == '2')
+              currentStyle = TextStyle::H2;
+            else if (tag_name[1] == '3')
+              currentStyle = TextStyle::H3;
+            else
+              currentStyle = TextStyle::NORMAL;
+          }
+          pushNewline(false);
+        } else if (IsBlockTag(tag_name)) {
+          commitWord(); // commit pending text with its own style first
+          // Simplified model: any block boundary (opening tag or stray
+          // closing tag) auto-closes an open heading; block content is
+          // always normal-styled here. Not strict HTML5: browsers keep
+          // the heading open through <p>/<div> - the symmetry is the
+          // point, not browser fidelity.
+          currentStyle = TextStyle::NORMAL;
+          pushNewline(false);
+        }
+        // anything else (span, i, b, a, img, ...) is inline: ignored,
+        // and does not break the current word.
+      } else {
+        if (strcmp(tag_name, "br") == 0) {
+          // Browsers treat a stray </br> as <br>.
+          commitWord();
+          pushNewline(true);
+        } else if (IsHeading(tag_name)) {
+          commitWord(); // commit with the heading's style first
+          currentStyle = TextStyle::NORMAL;
+          pushNewline(false);
+        } else if (IsBlockTag(tag_name)) {
+          commitWord(); // commit pending text with its own style first
+          // Same simplified model as the opening branch: any block
+          // boundary resets the heading style. (Not strict HTML5: a
+          // stray </p> inserts an empty p and an unmatched </div> is
+          // ignored, so browsers would keep the heading open - the
+          // symmetry is the point.)
+          currentStyle = TextStyle::NORMAL;
+          pushNewline(false);
+        }
+      }
+
+      i = (int)(q - html); // now on '>', loop increment moves past it
+      continue;
+    }
+
+    unsigned char uc = (unsigned char)c;
+    // Check for CJK start byte (roughly 0xE0 - 0xEF for common CJK)
+    if (uc >= 0xE0 && uc <= 0xEF) {
+      // Commit pending word first
+      commitWord();
+
+      // Capture the 3-byte char as a standalone "word"
+      if (html[i + 1] && html[i + 2]) {
+        currentWord[0] = c;
+        currentWord[1] = html[i + 1];
+        currentWord[2] = html[i + 2];
+        currentWordLen = 3;
+        commitWord(); // Commit this character immediately
+        i += 2;       // Skip next 2 bytes (loop adds 1 more)
+      }
+    } else if (IsWhitespace(c)) {
+      commitWord();
+    } else if (currentWordLen < 255) {
+      currentWord[currentWordLen++] = c;
     }
   }
 
