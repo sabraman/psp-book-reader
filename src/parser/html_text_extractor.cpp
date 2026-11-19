@@ -211,6 +211,7 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
       }
       // *q can point either on > or \0 (bc it reached the end of the
       // string without finding a closing >)
+      bool recovered = false;
       if (!*q) {
         // Unterminated tag (e.g. an unclosed attribute quote). Lenient
         // fallback, after the CrossPoint firmware pattern: one malformed
@@ -221,10 +222,15 @@ int HtmlTextExtractor::ExtractWords(const char *html, char **words,
           DebugLogger::Log("Unterminated tag: rest of chapter skipped");
           break; // no '>' at all: the tag runs to the end of input
         }
+        recovered = true;
         DebugLogger::Log("Malformed tag: recovering at the first '>'");
       }
 
-      bool selfClosingTag = (q > p && q[-1] == '/');
+      // A recovered tag is malformed by definition: a '/' just before the
+      // recovered '>' may be a quote fragment, not a self-closing marker.
+      // Treat it as a normal tag so <script src="foo/> (missing closing
+      // quote) still enters the skipElem path instead of leaking its body.
+      bool selfClosingTag = !recovered && q > p && q[-1] == '/';
 
       if (!closingTag) {
         if (strcmp(tag_name, "script") == 0) {
